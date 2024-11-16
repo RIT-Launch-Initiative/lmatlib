@@ -11,7 +11,7 @@
 %       Description, equal to "openrocket" to identify the table as an OR import
 % 
 % Export notes:
-% - Decimal places: 10 decimal places
+% - Decimal places: 10 decimal places 
 % - Include headers: yes
 % - Include flight events: all
 % - Field separator: ","
