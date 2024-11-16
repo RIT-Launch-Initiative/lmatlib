@@ -1,5 +1,5 @@
-# Launch plotting utilities
-MATLAB utilities to plot data with consistent formatting for tech reports.
+# Launch MATLAB libraries
+MATLAB utilities for data import/export from simulations, clean plotting, and simulation.
 
 ## Layout
 ```
