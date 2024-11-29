@@ -1,4 +1,4 @@
-%% ORHELPER
+%% OPENROCKET
 % MATLAB implementation of the <a
 % href="https://github.com/SilentSys/orhelper">orhelper</a> Python script
 % that provides access to OpenRocket documents for easier simulation
@@ -6,11 +6,13 @@
 % 
 % PREREQUISITES
 %   - OpenRocket installation, containing jre/ and OpenRocket.jar class file
-%   - Version of MATLAB compatible with the Java version used by OpenRocket
-%   (Current OR 23.09 uses JDK 17, which in turn requires MATLAB >2024b)
+%   - Version of MATLAB <a href="https://www.mathworks.com/support/requirements/openjdk.html">compatible</a> with the Java version used by OpenRocket
+%   (Current OR 23.09 uses JDK 17, which requires MATLAB 2024a or newer)
+%   - Set up Java class path and Java environment using openrocket.setup(...)
 %   
 % NOTES 
-%   - Typically, OpenRocket will be located at C:\Program Files\OpenRocket
+%   - Typically, OpenRocket will be located at C:\Program Files\OpenRocket, and
+%   that is the default used by setup()
 classdef openrocket < handle
     
     % NOTES for DEVELOPERS
@@ -21,24 +23,26 @@ classdef openrocket < handle
     %   a first-time user would not be able to run the setup() function 
 
     properties (SetAccess = protected, GetAccess = public)
-        started (1,1) logical = false;
-        ork (1,1) string = "";
-        loaded (1,1) logical = false;
+        started (1,1) logical = false; % OR started?
+        ork (1,1) string = ""; % Path to .ork file
+        loaded (1,1) logical = false; % .ork loaded?
     end
 
     properties (Access = public)
     % properties (Access = protected)
+    % Eventually will protect these, but exposed to user for now
         document;
         loader;
         saver;
     end
 
     methods (Static, Access = public)
-        %% Set up environment to use correct Java version and OpenRocket class
-        % setup(openrocket_path)
-        % openrocket_path   folder of OpenRocket installation (contains OpenRocket.jar and jre/)
-        %   Defaults to C:\Program Files\OpenRocket
         function setup(openrocket_path)
+            % setup(openrocket_path) - folder of OpenRocket installation 
+            %   Contains OpenRocket.jar and jre/
+            %   Defaults to C:\Program Files\OpenRocket
+            % NOTE: Modifies $prefdir/javaclasspath.txt
+            % NOTE: Modifies Java environment - ensure MATLAB supports OR's Java runtime
             arguments
                 openrocket_path (1,1) string = "C:\Program Files\OpenRocket";
             end
@@ -74,6 +78,7 @@ classdef openrocket < handle
     
     methods (Access = public)
         function obj = openrocket(orkpath)
+            % Construct openrocket object with specified file
             arguments
                 orkpath (1,1) string
             end
@@ -99,6 +104,7 @@ classdef openrocket < handle
         end
 
         function start(obj)
+            % Start OpenRocket
             gui_module = net.sf.openrocket.startup.GuiModule();
             plugin_module = net.sf.openrocket.plugin.PluginModule();
 
@@ -119,6 +125,7 @@ classdef openrocket < handle
         end
 
         function load(obj)
+            % Load OpenRocket document
             if ~obj.started
                 error("OpenRocket not started");
             end
@@ -126,6 +133,7 @@ classdef openrocket < handle
         end
 
         function save(obj)
+            % Save OpenRocket document
             if ~obj.started
                 error("OpenRocket not started");
             end
