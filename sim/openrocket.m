@@ -8,80 +8,101 @@
 %   - OpenRocket installation, containing jre/ and OpenRocket.jar class file
 %   - Version of MATLAB <a href="https://www.mathworks.com/support/requirements/openjdk.html">compatible</a> with the Java version used by OpenRocket
 %   (Current OR 23.09 uses JDK 17, which requires MATLAB 2024a or newer)
-%   - Set up Java class path and Java environment using openrocket.setup(...)
+%   - Set up Java class path and Java environment using openrocket_setup(<path to openrocket>)
 %   
 % NOTES 
-%   - Typically, OpenRocket will be located at C:\Program Files\OpenRocket, and
-%   that is the default used by setup()
+%   - The OpenRocket class file has several components that duplicate classes
+%   MATLAB uses, so an SL4J error will appear on startup. This appears to
+%   practically not matter.
+%   - Typically, OpenRocket will be located at C:\Program Files\OpenRocket
+%   - Many of OpenRocket's features are, in one way or another, accessible
+%   through the <document> property of this class. 
 classdef openrocket < handle
     
-    % NOTES for DEVELOPERS
-    % - Avoid using "import" to abbreviate Java package access 
-    %   - it is not consistently applicable because some invocations like
-    %   javaMethod(..) and javaArray(..) require the full name anyway
-    %   - All import statements are loaded before class methods can be used, so
-    %   a first-time user would not be able to run the setup() function 
-
     properties (SetAccess = protected, GetAccess = public)
-        started (1,1) logical = false; % OR started?
-        ork (1,1) string = ""; % Path to .ork file
-        loaded (1,1) logical = false; % .ork loaded?
+        document; % OpenRocketDocument Java object
     end
 
-    properties (Access = public)
-    % properties (Access = protected)
-    % Eventually will protect these, but exposed to user for now
-        document;
-        loader;
-        saver;
+    properties (Constant, Access = protected)
+        saver = net.sf.openrocket.file.GeneralRocketSaver();
+        types = dictionary(...
+            string(net.sf.openrocket.simulation.FlightDataType.ALL_TYPES), ...
+            net.sf.openrocket.simulation.FlightDataType.ALL_TYPES);
     end
+
+    properties (Access = protected)
+        path (1,1) string = ""; % Path to OpenRocket file
+        loader; % Loader object
+    end
+
 
     methods (Static, Access = public)
-        function setup(openrocket_path)
-            % setup(openrocket_path) - folder of OpenRocket installation 
-            %   Contains OpenRocket.jar and jre/
-            %   Defaults to C:\Program Files\OpenRocket
-            % NOTE: Modifies $prefdir/javaclasspath.txt
-            % NOTE: Modifies Java environment - ensure MATLAB supports OR's Java runtime
-            arguments
-                openrocket_path (1,1) string = "C:\Program Files\OpenRocket";
+        function simulate(sim)
+            % Simulate an OpenRocket simulation with no listeners attached
+            %   sim     Simulation object
+            if string(sim.getStatus) ~= "UPTODATE"
+                listener_dt = "net.sf.openrocket.simulation.listeners.SimulationListener";
+                sim.simulate(javaArray(listener_dt, 0)); % NOTE simulates with no listeners
             end
-
-            if ~isfolder(openrocket_path)
-                error("Directory '%s' not found", java_path);
-            end
-            jenv_path = fullfile(openrocket_path, "jre");
-            if ~isfolder(jenv_path)
-                error("'jre' not found under %s", openrocket_path);
-            end
-            jar_path = fullfile(openrocket_path, "OpenRocket.jar");
-            if ~isfile(jar_path)
-                error("'OpenRocket.jar' not found under %s\n", openrocket_path);
-            end
-            
-            jenv(jenv_path);
-            jcp = fullfile(prefdir, "javaclasspath.txt");
-            fid = fopen(jcp, "w");
-            % Write <before> to pre-pend contents of javaclasspath to MATLAB static path
-            % This prevents a conflicting (old) version of Guice from breaking the startup sequence
-            % https://stackoverflow.com/questions/16366059/best-way-to-override-matlabs-default-static-javaclasspath
-            fwrite(fid, "<before>");
-            fwrite(fid, jar_path);
-            fclose(fid);
-
-            jenv
-            fprintf("OpenRocket class path written to %s\n", jcp);
-            fprintf("Restart MATLAB to apply changes\n");
         end
 
+        % https://www.mathworks.com/help/compiler_sdk/java/rules-for-data-conversion-between-java-and-matlab.html
+        function data = get_data(sim, variables)
+            % Retreive data from an OpenRocket simulation
+            % data = get_data(sim, variables)
+            %   sim         Simulation object (returned by openrocket.sims() or directly accessed)
+            %   variables   (Optional) list of variables to return
+            %               Defaults to add all of them
+            % 
+            % NOTE All variables are unitless or MKS
+            % NOTE Does not assign units, export events, or identify table as OR import for plot_openrocket()
+            arguments
+                sim
+                variables string = openrocket.types.keys;
+            end
+
+            variables = variables(variables ~= "Time");
+            openrocket.simulate(sim);
+            branch = sim.getSimulatedData().getBranch(0); % NOTE assumes branch 0
+
+            time = openrocket.jarr2double(branch.get(openrocket.types("Time")));
+            data = timetable(Size = [length(time) length(variables)], ...
+                VariableTypes = repmat("double", 1, length(variables)), ...
+                VariableNames = variables, ...
+                RowTimes = seconds(time)); % NOTE assumes time is in seconds
+
+            for idx = 1:length(variables)
+                col = variables(idx);
+                jarr = branch.get(openrocket.types(col));
+                if isempty(jarr)
+                    data = removevars(data, col);
+                else
+                    data.(col) = openrocket.jarr2double(branch.get(openrocket.types(col)));
+                end
+            end
+        end
+
+        function vars = list_variables
+            vars = openrocket.types.keys;
+        end
+    end
+
+    methods (Static, Access = protected)
+        function doubles = jarr2double(jarr)
+            double_arr = javaArray("java.lang.Double", jarr.size);
+            jarr.toArray(double_arr);
+            doubles = double(double_arr);
+            % slight speed improvment over <list = double(toArray(jarr))>;
+        end
     end
     
-    methods (Access = public)
+    methods 
         function obj = openrocket(orkpath)
-            % Construct openrocket object with specified file
+            % Construct openrocket object and load program
             arguments
                 orkpath (1,1) string
             end
+
             [~, ~, ext] = fileparts(orkpath);
             if ~isfile(orkpath)
                 error("File '%s' does not exist", orkpath);
@@ -100,11 +121,8 @@ classdef openrocket < handle
                 error("No 'openrocket.jar' (case-insensitive) found on static class path.")
             end
 
-            obj.ork = orkpath;
-        end
+            obj.path = orkpath;
 
-        function start(obj)
-            % Start OpenRocket
             gui_module = net.sf.openrocket.startup.GuiModule();
             plugin_module = net.sf.openrocket.plugin.PluginModule();
 
@@ -117,28 +135,27 @@ classdef openrocket < handle
             level = ch.qos.logback.classic.Level.ERROR;
             logger.setLevel(level);
 
-            java_file = java.io.File(obj.ork);
+            java_file = java.io.File(obj.path);
             obj.loader = net.sf.openrocket.file.GeneralRocketLoader(java_file);
-            obj.saver = net.sf.openrocket.file.GeneralRocketSaver();
-
-            obj.started = true;
-        end
-
-        function load(obj)
-            % Load OpenRocket document
-            if ~obj.started
-                error("OpenRocket not started");
-            end
             obj.document = obj.loader.load();
         end
 
         function save(obj)
             % Save OpenRocket document
-            if ~obj.started
-                error("OpenRocket not started");
-            end
-            java_file = java.io.File(obj.ork);
+            java_file = java.io.File(obj.path);
             obj.saver.save(java_file, obj.document);
+        end
+
+        function out = sims(obj, sim)
+            sims = toArray(obj.document.getSimulations());
+            if nargin == 1
+                out = sims;
+            elseif isnumeric(sim)
+                out = sims(sim);
+            elseif isstring(sim)
+                names = arrayfun(@(sim) string(sim.getName()), sims);
+                out = sims(names == sim);
+            end
         end
     end
 end
