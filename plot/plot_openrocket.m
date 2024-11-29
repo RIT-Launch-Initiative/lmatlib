@@ -41,6 +41,13 @@ function [pl, pr, xl] = plot_openrocket(table, first, second, interval, markers)
         warning("Table is not identified as an OpenRocket import by its description");
     end
 
+    % if start_ev == ""
+    %     
+    % end
+    % if end_ev = ""
+    %
+    % end
+
     %% Restrict table to selection
     plot_range = timerange(eventfilter(interval.start_ev), ...
         eventfilter(interval.end_ev), "closed");
@@ -85,9 +92,11 @@ function [pl, pr, xl] = plot_openrocket(table, first, second, interval, markers)
     % override?
 
     % plot markers
-    xl = xline(ev_in_range.Time(selected_ev), "-k", ...
-        ev_in_range.EventLabels(selected_ev), ...
-        Interpreter = "none", HandleVisibility = "off");
-    xl(end).LabelHorizontalAlignment = "left";
+    if any(selected_ev)
+        xl = xline(ev_in_range.Time(selected_ev), "-k", ...
+            ev_in_range.EventLabels(selected_ev), ...
+            Interpreter = "none", HandleVisibility = "off");
+        xl(end).LabelHorizontalAlignment = "left";
+    end
 end
 
