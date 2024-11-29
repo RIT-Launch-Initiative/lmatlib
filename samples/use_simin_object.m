@@ -4,7 +4,7 @@ clear; close all;
 
 %% Flight data import
 SL = 1401; % [m] Ground level above sea level
-openrocket = import_openrocket_simdata("data/OMEN_OR_Output.csv");
+openrocket = import_openrocket_csv("data/OMEN_OR_Output.csv");
 openrocket.ASL = SL + openrocket.("Altitude");
 openrocket.Properties.VariableUnits("ASL") = "m";
 

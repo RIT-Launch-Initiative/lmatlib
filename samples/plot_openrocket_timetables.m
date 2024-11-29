@@ -4,7 +4,7 @@
 clear; close all;
 
 OR_source = "data/OMEN_OR_Output.csv";
-simdata = import_openrocket_simdata(OR_source);
+simdata = import_openrocket_csv(OR_source);
 set_grids("on");
 set_interpreters("remove");
 
