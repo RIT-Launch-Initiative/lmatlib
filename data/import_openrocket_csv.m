@@ -55,7 +55,7 @@ function timetab = import_openrocket_csv(path, opts)
 
     % get rid of special characters
     headers.unit(headers.unit == "°") = "deg";
-    headers.unit(headers.unit == "​") = "-";
+    headers.unit(headers.unit == "​") = "";
 
     % status output
     if opts.verbose 
