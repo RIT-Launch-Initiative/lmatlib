@@ -1,6 +1,5 @@
 %% OPENROCKET
-% MATLAB implementation of the <a
-% href="https://github.com/SilentSys/orhelper">orhelper</a> Python script
+% MATLAB implementation of the <a href="https://github.com/SilentSys/orhelper">orhelper</a> Python script
 % that provides access to OpenRocket documents for easier simulation
 % automation and control system design.
 % 
@@ -29,24 +28,18 @@ classdef openrocket < handle
     properties (Constant, Access = protected)
         started = openrocket.start(); % dummy constant to ensure start() is called once
 
-        % Translations
         types = openrocket.make_type_map(); % Column name to FlightDataType
         units = openrocket.make_units_map(); % Column name to units
-        rename = openrocket.make_rename_map(); % Column name to better column name
 
-        % Object shortcuts
         saver = net.sf.openrocket.file.GeneralRocketSaver();
         barrowman = net.sf.openrocket.aerodynamics.BarrowmanCalculator();
         masscalc = net.sf.openrocket.masscalc.MassCalculator();
         warnings = net.sf.openrocket.logging.WarningSet();
+        empty_listeners = javaArray("net.sf.openrocket.simulation.listeners.SimulationListener", 0)
 
-        % Magic values
-        status_uptodate = "UPTODATE"; % indicates simulation is up to date
-        listener_class = "net.sf.openrocket.simulation.listeners.SimulationListener"; 
-        % ^ data type for SimulationListener to make an empty array
-        time_name = "Time"; % Name of the time column
-        reco_name = openrocket.translate_event("Recovery device deployment"); 
-        % ^ Name of a recovery device deployment
+        status_uptodate = "UPTODATE"; 
+        time_name = "Time"; 
+        reco_name = "RECOVERY_DEVICE_DEPLOYMENT"
     end
 
     properties (Access = protected)
@@ -59,7 +52,7 @@ classdef openrocket < handle
             % Simulate an OpenRocket simulation with no listeners attached
             %   sim     Simulation object
             if string(sim.getStatus) ~= openrocket.status_uptodate % So that repeated calls don't waste time
-                sim.simulate(javaArray(openrocket.listener_class, 0)); % NOTE simulates with no listeners
+                sim.simulate(openrocket.empty_listeners); % NOTE simulates with no listeners
             end
         end
 
@@ -101,8 +94,8 @@ classdef openrocket < handle
 
             % Assign metadata
             evs = toArray(branch.getEvents());
-            names = arrayfun(@(ev) openrocket.translate_event(ev.getType), evs);
-            times = arrayfun(@(ev) ev.getTime, evs);
+            names = arrayfun(@(ev) string(ev.getType().name()), evs);
+            times = arrayfun(@(ev) ev.getTime(), evs);
             reco_idx = find(names == openrocket.reco_name);
             if length(reco_idx) == 2
                 names(reco_idx(1)) = "DROGUE";
@@ -110,12 +103,12 @@ classdef openrocket < handle
             end
             data.Properties.Events = eventtable(seconds(times), EventLabels = names); 
             data.Properties.VariableUnits = openrocket.units(data.Properties.VariableNames);
-            data.Properties.VariableNames = openrocket.rename(data.Properties.VariableNames);
             data.Properties.VariableContinuity = repmat("continuous", 1, width(data));
             data.Properties.Description = "openrocket"; % Identify as OpenRocket import
         end
 
         function fc = flight_conds(cfg, mach, aoa, theta, rpy_rate)
+            % Get flight condition object for given inputs
             arguments
                 cfg % Flight configuration (output of flight_config)
                 mach (1,1) double = 0.3;
@@ -133,10 +126,12 @@ classdef openrocket < handle
         end
 
         function data = aerodata(cfg, fc)
+            % Calculate aerodynamic data given flight configuration and flight condition
             data = openrocket.barrowman.getAerodynamicForces(cfg, fc, openrocket.warnings);
         end
 
         function data = massdata(cfg, state)
+            % Get mass data for rocket state
             switch state
                 case "LAUNCH"
                     data = openrocket.masscalc.calculateLaunch(cfg);
@@ -170,17 +165,24 @@ classdef openrocket < handle
                 error("No 'openrocket.jar' (case-insensitive) found on static class path.")
             end
 
+
+            wb = waitbar(0, "Creating application modules...");
             gui_module = net.sf.openrocket.startup.GuiModule();
             plugin_module = net.sf.openrocket.plugin.PluginModule();
-
             injector = com.google.inject.Guice.createInjector([gui_module, plugin_module]);
             net.sf.openrocket.startup.Application.setInjector(injector);
+
+            waitbar(0.5, wb, "Loading...");
             gui_module.startLoader();
 
+            waitbar(0.9, wb, "Configuring logger...");
             logger = org.slf4j.LoggerFactory.getLogger(...
                 ch.qos.logback.classic.Logger.ROOT_LOGGER_NAME);
             level = ch.qos.logback.classic.Level.ERROR;
             logger.setLevel(level);
+
+            waitbar(1, wb, "Done.");
+            close(wb);
             ret = true;
         end
 
@@ -188,24 +190,20 @@ classdef openrocket < handle
             % Create flight data type dictionary
             types = net.sf.openrocket.simulation.FlightDataType.ALL_TYPES;
             keys = string(types);
+            keys(keys == "Stability margin calibers") = "Stability margin";
             dict = dictionary(keys, types);
         end
 
         function dict = make_units_map
-            types = net.sf.openrocket.simulation.FlightDataType.ALL_TYPES;
-            keys = string(types);
-            units = arrayfun(@(fdt) string(fdt.getUnitGroup().getSIUnit()), types);
-
+            map = entries(openrocket.make_type_map);
+            
+            string_si_unit = @(fdtype) string(fdtype.getUnitGroup().getSIUnit());
+            units = arrayfun(string_si_unit, map.Value);
             units(units == "°") = "deg";
             units(units == "​") = "";
 
-            dict = dictionary(keys, units);
-            dict("Stability margin calibers") = "cal";
-        end
-
-        function dict = make_rename_map
-            dict = dictionary(openrocket.types.keys, openrocket.types.keys);
-            dict("Stability margin calibers") = "Stability margin";
+            dict = dictionary(map.Key, units);
+            dict("Stability margin") = "cal";
         end
 
         function doubles = jarr2double(jarr)
@@ -214,12 +212,6 @@ classdef openrocket < handle
             jarr.toArray(double_arr);
             doubles = double(double_arr);
             % slight speed improvment over <list = double(toArray(jarr))>;
-        end
-
-        function str = translate_event(ev)
-            str = upper(string(ev));
-            str = strrep(str, " ", "_");
-            str = strrep(str, "-", "_");
         end
     end
     
