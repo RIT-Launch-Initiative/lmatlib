@@ -1,7 +1,13 @@
-% setup(openrocket_path) - folder of OpenRocket installation 
+% openrocket_setup(path) - 
+%   <path> is the absolute path to the OpenRocket installation 
 %   Contains OpenRocket.jar and jre/
-% NOTE: Modifies $prefdir/javaclasspath.txt
+%   
+% Example: openrocket_setup("C:/Program Files/OpenRocket")
+% 
+% NOTE: Overwrites $prefdir/javaclasspath.txt
 % NOTE: Modifies Java environment - ensure MATLAB <a href="https://www.mathworks.com/support/requirements/openjdk.html">supports</a> OR's Java runtime
+% NOTE: Some of OpenRocket's classes override MATLAB classes, which may cause
+% errors (but no breaking changes are known of at time of writing)
 function openrocket_setup(openrocket_path)
     arguments
         openrocket_path (1,1) string;
