@@ -1,8 +1,8 @@
+% setup(openrocket_path) - folder of OpenRocket installation 
+%   Contains OpenRocket.jar and jre/
+% NOTE: Modifies $prefdir/javaclasspath.txt
+% NOTE: Modifies Java environment - ensure MATLAB <a href="https://www.mathworks.com/support/requirements/openjdk.html">supports</a> OR's Java runtime
 function openrocket_setup(openrocket_path)
-    % setup(openrocket_path) - folder of OpenRocket installation 
-    %   Contains OpenRocket.jar and jre/
-    % NOTE: Modifies $prefdir/javaclasspath.txt
-    % NOTE: Modifies Java environment - ensure MATLAB supports OR's Java runtime
     arguments
         openrocket_path (1,1) string;
     end
