@@ -63,14 +63,14 @@ function [pl, pr, xl] = plot_openrocket(table, first, second, interval, markers)
     %% Plot
     % plot left axis
     pl = plot(table, first);
-    ylabel(sprintf("%s [%s]", first, units(1)));
-
+    ylabel(format_axis_label(first, units(1)));
 
     % plot right axis if present
     if second ~= ""
         yyaxis right;
 
         pr = plot(table, second);
+        ylabel(format_axis_label(second, units(2)));
         ylabel(sprintf("%s [%s]", second, units(2)));
 
         yyaxis left; % go back to left axis
@@ -100,3 +100,10 @@ function [pl, pr, xl] = plot_openrocket(table, first, second, interval, markers)
     end
 end
 
+function str = format_axis_label(quantity, units)
+    if units == "" || units == " " || units == "-" % flavors of "unitless"
+        str = quantity;
+    else 
+        str = sprintf("%s\n[%s]", quantity, units);
+    end
+end
