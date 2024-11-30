@@ -71,7 +71,6 @@ function [pl, pr, xl] = plot_openrocket(table, first, second, interval, markers)
 
         pr = plot(table, second);
         ylabel(format_axis_label(second, units(2)));
-        ylabel(sprintf("%s [%s]", second, units(2)));
 
         yyaxis left; % go back to left axis
     end
