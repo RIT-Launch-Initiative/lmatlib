@@ -7,15 +7,13 @@
 %   - OpenRocket installation, containing jre/ and OpenRocket.jar class file
 %   - Version of MATLAB <a href="https://www.mathworks.com/support/requirements/openjdk.html">compatible</a> with the Java version used by OpenRocket
 %   (Current OR 23.09 uses JDK 17, which requires MATLAB 2024a or newer)
-%   - Set up Java class path and Java environment using openrocket_setup(<path to openrocket>)
+%   - Set up Java class path and Java environment using openrocket_setup(...)
 %   
 % NOTES 
-%   - The OpenRocket class file has several components that duplicate classes
-%   MATLAB uses, so an SL4J error will appear on startup. This appears to
-%   practically not matter.
-%   - Typically, OpenRocket will be located at C:\Program Files\OpenRocket
 %   - Many of OpenRocket's features are, in one way or another, accessible
 %   through the <document> property of this class. 
+%   - Operations cannot be parallelized becuase <parfor> <a href="https://www.mathworks.com/help/parallel-computing/objects-and-handles-in-parfor-loops.html">requires</a> the data 
+%   passed in to support save() and load (), which Java objects in MATLAB do not.
 
 % Written by Yevgeniy Gorbachev
 % November 2024
@@ -107,15 +105,128 @@ classdef openrocket < handle
             data.Properties.Description = "openrocket"; % Identify as OpenRocket import
         end
 
-        function fc = flight_conds(cfg, mach, aoa, theta, rpy_rate)
-            % Get flight condition object for given inputs
+
+        function vars = list_variables
+            % List available flight data types
+            vars = openrocket.types.keys;
+        end
+    end
+
+    methods 
+        function obj = openrocket(orkpath)
+            % Construct openrocket object from path to OpenRocket file
             arguments
-                cfg % Flight configuration (output of flight_config)
+                orkpath (1,1) string
+            end
+
+            [status, info] = fileattrib(orkpath);
+            if ~status
+                error("File '%s' does not exist", orkpath);
+            end
+            path = info.Name;
+            [~, ~, ext] = fileparts(path);
+            if ext ~= ".ork"
+                error("File has extension '%s' instead of '.ork'", ext);
+            end
+
+            obj.file = java.io.File(path);
+            obj.loader = net.sf.openrocket.file.GeneralRocketLoader(obj.file);
+            obj.document = obj.loader.load();
+        end
+
+        function save(obj)
+            % Save OpenRocket document to file
+            obj.saver.save(obj.file, obj.document);
+        end
+
+        function out = sims(obj, sim)
+            % Get simulations 
+            %   sim = or.sims()       
+            %       returns all simulations
+            %   sim = or.sims(index)  
+            %       return simulation at index (1-based)
+            %   sim = or.sims(name)   
+            %       return all simulations matching name
+
+            sims = toArray(obj.document.getSimulations());
+            if nargin == 1
+                out = sims;
+            elseif isnumeric(sim)
+                out = sims(sim);
+            elseif isstring(sim)
+                names = arrayfun(@(sim) string(sim.getName()), sims);
+                out = sims(names == sim);
+            end
+        end
+
+        function rkt = rocket(obj)
+            % Get Rocket object 
+            %   rkt = or.rocket();
+            rkt = obj.document.getRocket();
+        end
+
+        function cfg = get_config(obj, ident)
+            % Get FlightConfiguration 
+            %   config = or.get_config
+            %       return selected flight configuration
+            %   config = or.get_config(1)
+            %       return indexed flight configuration
+            %   config = or.get_config("[No motors]")
+            %       return named flight configuration
+
+            if nargin == 1
+                cfg = obj.rocket().getSelectedConfiguration();
+            elseif nargin == 2
+                configs = toArray(obj.rocket().getFlightConfigurations());
+                if isnumeric(ident)
+                    cfg = configs(ident);
+                elseif isstring(ident)
+                    cfg = configs(string(configs) == ident);
+                end
+                if isempty(cfg)
+                    error("No flight configuration found");
+                end
+            end
+        end
+
+        function set_config(obj, ident)
+            % Set currently selected FlightConfiguration
+            cfg = obj.get_config(ident);
+            obj.rocket().setSelectedConfiguration(cfg.getId);
+        end
+
+        function comp = component(obj, name)
+            % Search entire Rocket for component name
+            %   component = or.component(name)
+
+            parts = obj.rocket().getAllChildren();
+            parts = toArray(parts);
+            names = string(parts);
+            found = find(names == name);
+            if isempty(found)
+                error("Could not find component '%s' in rocket", name);
+            elseif length(found) >= 2
+                error("Found %d components matching '%s'", length(found), name);
+            end
+            comp = parts(found);
+        end
+
+        function fc = flight_condition(obj, mach, aoa, theta, rpy_rate)
+            % Get flight condition object for given inputs
+            %   fc = flight_condition(obj)
+            %       returns object with Ma=0.3, all angles and rates zero
+            %   fc = flight_condition(obj, aoa, theta, rpy_rate)
+            %       returns object with properties populated in indicated sequence
+            %       Some or all can remain unspecified, and default to 0
+
+            arguments
+                obj openrocket;
                 mach (1,1) double = 0.3;
                 aoa (1,1) double = 0;
                 theta (1,1) double = 0;
                 rpy_rate (3,1) double = [0; 0; 0];
             end
+            cfg = obj.get_config();
             fc = net.sf.openrocket.aerodynamics.FlightConditions(cfg);
             fc.setMach(mach);
             fc.setAOA(aoa);
@@ -125,31 +236,85 @@ classdef openrocket < handle
             fc.setYawRate(rpy_rate(3));
         end
 
-        function data = aerodata(cfg, fc)
-            % Calculate aerodynamic data given flight configuration and flight condition
+        function [data] = aerodata6(obj, fc)
+            % Get entire (6-DOF) AerodynamicForces object at given FlightCondition
+            %   forces = or.aerodata6(fc)
+            %       returns an AerodynamicForces object, in which individual
+            %       coefficients are accessed through their Java accessors
+
+            cfg = obj.get_config();
             data = openrocket.barrowman.getAerodynamicForces(cfg, fc, openrocket.warnings);
         end
 
-        function data = massdata(cfg, state)
-            % Get mass data for rocket state
+        function [CP, CD, CN, Cm, CNa] = aerodata3(obj, fc)
+            % Get 3-DOF aerodynamic data at given FlightCondition
+            %   [CP, CD, CN, Cm, CNa] = or.aerodata3(fc)
+            %       CP      Center of pressure (from nose, m)
+            %       CD      Drag coefficient
+            %       CN      Normal force coefficient
+            %       CM      Pitching moment coefficient
+            %       CNa     Normal force derivative
+
+            cfg = obj.get_config();
+            data = openrocket.barrowman.getAerodynamicForces(cfg, fc, openrocket.warnings);
+            CP = data.getCP.x;
+            CD = data.getCD;
+            CN = data.getCN;
+            Cm = data.getCm;
+            CNa = data.getCNa;
+        end
+
+        function [d, A] = refdims(obj)
+            % Get reference dimensions
+            %   [d, A] = or.refdims()
+            %       d   reference length (m)
+            %       A   reference area (m^2)
+
+            fc = obj.flight_condition();
+            d = fc.getRefLength();
+            A = fc.getRefArea();
+
+        end
+
+        function [CG, mass, moi] = massdata(obj, state)
+            % Get mass data for rocket state in selected flight state
+            %   [CG, mass, moi] = or.massdata(state)
+            %       state   "LAUNCH" or "BURNOUT"
+            %       
+            %       CG      Center of mass (from nose, m)
+            %       mass    Vehicle mass (kg)
+            %       moi     Principal moments about [roll; pitch; yaw] (kg*m^2)
+
+            cfg = obj.get_config();
             switch state
                 case "LAUNCH"
                     data = openrocket.masscalc.calculateLaunch(cfg);
                 case "BURNOUT"
                     data = openrocket.masscalc.calculateBurnout(cfg);
-                case "STRUCTURE"
-                    data = openrocket.masscalc.calculateStructure(cfg);
                 otherwise 
                     error("Unrecognized flight state '%s'", state)
             end
+            CG = data.getCM.x;
+            mass = data.getMass;
+            moi = [data.getIxx; data.getIyy; data.getIzz];
         end
+        
+        function ssm = stability(obj, state, fc)
+            % Get stability margin given flight state and flight condition
+            %   ssm = or.massdata(state, fc)
+            %       state   "LAUNCH" or "BURNOUT"
+            %       fc      FlightCondition
+            %       
+            %       ssm     Stability margin, in calibers
 
-        function vars = list_variables
-            % List available flight data types
-            vars = openrocket.types.keys;
+            cfg = obj.get_config();
+            CP3 = openrocket.barrowman.getCP(cfg, fc, openrocket.warnings);
+            CP = CP3.x;
+            [CG, ~, ~] = obj.massdata(state);
+            ssm = (CP - CG) / fc.getRefLength();
         end
     end
-
+    
     methods (Static, Access = protected)
         function ret = start()
             % Create barebones OpenRocket application. This is intended to be
@@ -188,6 +353,7 @@ classdef openrocket < handle
 
         function dict = make_type_map
             % Create flight data type dictionary
+            %   Maps name -> FlightDataType object (used by FlightDataBranch.get)
             types = net.sf.openrocket.simulation.FlightDataType.ALL_TYPES;
             keys = string(types);
             keys(keys == "Stability margin calibers") = "Stability margin";
@@ -195,6 +361,8 @@ classdef openrocket < handle
         end
 
         function dict = make_units_map
+            % Create flight units dictionary
+            %   Maps name -> unit
             map = entries(openrocket.make_type_map);
             
             string_si_unit = @(fdtype) string(fdtype.getUnitGroup().getSIUnit());
@@ -215,86 +383,5 @@ classdef openrocket < handle
         end
     end
     
-    methods 
-        function obj = openrocket(orkpath)
-            % Construct openrocket object from path to OpenRocket file
-            arguments
-                orkpath (1,1) string
-            end
-
-            [status, info] = fileattrib(orkpath);
-            if ~status
-                error("File '%s' does not exist", orkpath);
-            end
-            path = info.Name;
-            [~, ~, ext] = fileparts(path);
-            if ext ~= ".ork"
-                error("File has extension '%s' instead of '.ork'", ext);
-            end
-
-            obj.file = java.io.File(path);
-            obj.loader = net.sf.openrocket.file.GeneralRocketLoader(obj.file);
-            obj.document = obj.loader.load();
-        end
-
-        function save(obj)
-            % Save OpenRocket document to file
-            obj.saver.save(obj.file, obj.document);
-        end
-
-        function out = sims(obj, sim)
-            % Get simulations 
-            %   sims()       returns all simulations
-            %   sims(index)  return simulation at index (1-based)
-            %   sims(name)   return all simulations matching name
-
-            sims = toArray(obj.document.getSimulations());
-            if nargin == 1
-                out = sims;
-            elseif isnumeric(sim)
-                out = sims(sim);
-            elseif isstring(sim)
-                names = arrayfun(@(sim) string(sim.getName()), sims);
-                out = sims(names == sim);
-            end
-        end
-
-        function rkt = rocket(obj)
-            % Get Rocket object from document
-            rkt = obj.document.getRocket();
-        end
-
-        function cfg = flight_config(obj, ident)
-            % Get flight configuration by 1-index or name
-            %   config = or.flight_config(1)
-            %   config = or.flight_config("[No motors]")
-
-            configs = toArray(obj.rocket().getFlightConfigurations());
-            if isnumeric(ident)
-                cfg = configs(ident);
-            elseif isstring(ident)
-                cfg = configs(string(configs) == ident);
-            end
-            if isempty(cfg)
-                error("No flight configuration found");
-            end
-        end
-
-        function comp = component(obj, name)
-            % Search entire Rocket for component name
-            %   component = or.component(name)
-
-            parts = obj.rocket().getAllChildren();
-            parts = toArray(parts);
-            names = string(parts);
-            found = find(names == name);
-            if isempty(found)
-                error("Could not find component '%s' in rocket", name);
-            elseif length(found) >= 2
-                error("Found %d components matching '%s'", length(found), name);
-            end
-            comp = parts(found);
-        end
-    end
 end
 
