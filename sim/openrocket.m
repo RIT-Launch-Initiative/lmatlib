@@ -1,7 +1,8 @@
 %% OPENROCKET
-% MATLAB implementation of the <a href="https://github.com/SilentSys/orhelper">orhelper</a> Python script
-% that provides access to OpenRocket documents for easier simulation
-% automation and control system design.
+% MATLAB utility class that loads an OpenRocket application and provides many
+% utilities for automating OpenRocket simulations and retreiving calculations.
+% 
+% The application startup is translated from <a href="https://github.com/SilentSys/orhelper/blob/master/orhelper/_orhelper.py">SilentSys/orhelper</a>, many thanks for doing the annoying part.
 % 
 % PREREQUISITES
 %   - OpenRocket installation, containing jre/ and OpenRocket.jar class file
@@ -29,15 +30,13 @@ classdef openrocket < handle
         types = openrocket.make_type_map(); % Column name to FlightDataType
         units = openrocket.make_units_map(); % Column name to units
 
-        saver = net.sf.openrocket.file.GeneralRocketSaver();
-        barrowman = net.sf.openrocket.aerodynamics.BarrowmanCalculator();
-        masscalc = net.sf.openrocket.masscalc.MassCalculator();
-        warnings = net.sf.openrocket.logging.WarningSet();
-        empty_listeners = javaArray("net.sf.openrocket.simulation.listeners.SimulationListener", 0)
-
-        status_uptodate = "UPTODATE"; 
-        time_name = "Time"; 
-        reco_name = "RECOVERY_DEVICE_DEPLOYMENT"
+        saver = net.sf.openrocket.file.GeneralRocketSaver(); % Rocket file saver
+        barrowman = net.sf.openrocket.aerodynamics.BarrowmanCalculator(); % Barrowman calculator
+        masscalc = net.sf.openrocket.masscalc.MassCalculator();  % Mass calculator
+        warnings = net.sf.openrocket.logging.WarningSet(); % Empty warning set (for Barrowman calculator input)
+        status_uptodate = "UPTODATE";  % Magic value: Indicates up-to-date simulation
+        time_name = "Time"; % Magic value: Name given to the time axis
+        reco_name = "RECOVERY_DEVICE_DEPLOYMENT"; % Magic value: Name printed for recovery events
     end
 
     properties (Access = protected)
@@ -46,11 +45,30 @@ classdef openrocket < handle
     end
 
     methods (Static, Access = public)
-        function simulate(sim)
-            % Simulate an OpenRocket simulation with no listeners attached
-            %   sim     Simulation object
-            if string(sim.getStatus) ~= openrocket.status_uptodate % So that repeated calls don't waste time
-                sim.simulate(openrocket.empty_listeners); % NOTE simulates with no listeners
+        function simulate(sim, varargin)
+            % Simulate an OpenRocket simulation 
+            %   simulate(sim, [, "bypass"][, "apogee"])
+            %       sim         Simulation object
+            %       "bypass"    Bypass up-to-date simulation and re-simulate
+            %       "apogee"    Terminate simulation at apogee
+
+            % NOTE if this is modified, make sure the input to simulate() is
+            % exactly the class Java expects - if it isn't, MATLAB thinks
+            % you're trying to call simulate() from some random Toolbox instead
+            % of giving a Java error.
+
+            flags = string(varargin);
+            if string(sim.getStatus) ~= openrocket.status_uptodate ...
+                    || any(flags == "bypass") % So that repeated calls don't waste time
+                listener_class = "net.sf.openrocket.simulation.listeners.SimulationListener"; 
+                if any(flags == "apogee")
+                    apogee_end = net.sf.openrocket.simulation.listeners.system.ApogeeEndListener;
+                    listeners = javaArray(listener_class, 1);
+                    listeners(1) = apogee_end.INSTANCE;
+                else
+                    listeners = javaArray(listener_class, 0);
+                end
+                sim.simulate(listeners); 
             end
         end
 
@@ -62,6 +80,9 @@ classdef openrocket < handle
             %   variables   (Optional) list of variables to return
             %               Defaults to add all of them
             % 
+            % NOTE Automatically simulates outdated simulation. If you want to
+            % pass flags ("bypass" or "apogee") to simulate(), call simulate()
+            % with those flags, then get_data().
             % NOTE All variables are unitless or MKS
             arguments
                 sim
@@ -212,12 +233,14 @@ classdef openrocket < handle
         end
 
         function fc = flight_condition(obj, mach, aoa, theta, rpy_rate)
-            % Get flight condition object for given inputs
-            %   fc = flight_condition(obj)
-            %       returns object with Ma=0.3, all angles and rates zero
-            %   fc = flight_condition(obj, aoa, theta, rpy_rate)
+            % Get FlightCondition object for given inputs
+            %   fc = flight_condition(obj, mach, aoa, theta, rpy_rate)
             %       returns object with properties populated in indicated sequence
-            %       Some or all can remain unspecified, and default to 0
+            %       Some or all can remain unspecified, and default to 0 (except Ma=0.3)
+            %   
+            %   EXAMPLES
+            %   fc = or.flight_condition() - default flight condition
+            %   fc = or.flight_condition(0.2, deg2rad(5)) - Ma=0.2, alpha=5 deg
 
             arguments
                 obj openrocket;
@@ -317,9 +340,9 @@ classdef openrocket < handle
     
     methods (Static, Access = protected)
         function ret = start()
-            % Create barebones OpenRocket application. This is intended to be
-            % called exactly once in a MATLAB session, acheived by assigning return
-            % value to Constant attribute.
+            % Creates barebones OpenRocket application. 
+            % This is intended to be called exactly once in a MATLAB session,
+            % acheived by assigning return value to Constant attribute.
             je = jenv;
             if ~contains(je.Version, "Java 17")
                 error("OpenRocket v23.09 requires Java 17, got '%s'", je.Version);
@@ -329,7 +352,6 @@ classdef openrocket < handle
             if ~any(contains(lower(jcp), "openrocket.jar"))
                 error("No 'openrocket.jar' (case-insensitive) found on static class path.")
             end
-
 
             wb = waitbar(0, "Creating application modules...");
             gui_module = net.sf.openrocket.startup.GuiModule();
