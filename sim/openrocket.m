@@ -26,15 +26,19 @@ classdef openrocket < handle
         document; % OpenRocketDocument Java object
     end
 
-    properties (Constant, Access = public)
-        types = openrocket.make_type_map();
-        units = openrocket.make_units_map();
-    end
-
     properties (Constant, Access = protected)
-        rename = openrocket.make_rename_map();
         started = openrocket.start(); % dummy constant to ensure start() is called once
+
+        % Translations
+        types = openrocket.make_type_map(); % Column name to FlightDataType
+        units = openrocket.make_units_map(); % Column name to units
+        rename = openrocket.make_rename_map(); % Column name to better column name
+
+        % Object shortcuts
         saver = net.sf.openrocket.file.GeneralRocketSaver();
+        barrowman = net.sf.openrocket.aerodynamics.BarrowmanCalculator();
+        masscalc = net.sf.openrocket.masscalc.MassCalculator();
+        warnings = net.sf.openrocket.logging.WarningSet();
 
         % Magic values
         status_uptodate = "UPTODATE"; % indicates simulation is up to date
@@ -49,7 +53,6 @@ classdef openrocket < handle
         file;   % Java File object
         loader; % Java Loader object
     end
-
 
     methods (Static, Access = public)
         function simulate(sim)
@@ -110,6 +113,40 @@ classdef openrocket < handle
             data.Properties.VariableNames = openrocket.rename(data.Properties.VariableNames);
             data.Properties.VariableContinuity = repmat("continuous", 1, width(data));
             data.Properties.Description = "openrocket"; % Identify as OpenRocket import
+        end
+
+        function fc = flight_conds(cfg, mach, aoa, theta, rpy_rate)
+            arguments
+                cfg % Flight configuration (output of flight_config)
+                mach (1,1) double = 0.3;
+                aoa (1,1) double = 0;
+                theta (1,1) double = 0;
+                rpy_rate (3,1) double = [0; 0; 0];
+            end
+            fc = net.sf.openrocket.aerodynamics.FlightConditions(cfg);
+            fc.setMach(mach);
+            fc.setAOA(aoa);
+            fc.setTheta(theta);
+            fc.setRollRate(rpy_rate(1));
+            fc.setPitchRate(rpy_rate(2));
+            fc.setYawRate(rpy_rate(3));
+        end
+
+        function data = aerodata(cfg, fc)
+            data = openrocket.barrowman.getAerodynamicForces(cfg, fc, openrocket.warnings);
+        end
+
+        function data = massdata(cfg, state)
+            switch state
+                case "LAUNCH"
+                    data = openrocket.masscalc.calculateLaunch(cfg);
+                case "BURNOUT"
+                    data = openrocket.masscalc.calculateBurnout(cfg);
+                case "STRUCTURE"
+                    data = openrocket.masscalc.calculateStructure(cfg);
+                otherwise 
+                    error("Unrecognized flight state '%s'", state)
+            end
         end
 
         function vars = list_variables
@@ -233,6 +270,22 @@ classdef openrocket < handle
         function rkt = rocket(obj)
             % Get Rocket object from document
             rkt = obj.document.getRocket();
+        end
+
+        function cfg = flight_config(obj, ident)
+            % Get flight configuration by 1-index or name
+            %   config = or.flight_config(1)
+            %   config = or.flight_config("[No motors]")
+
+            configs = toArray(obj.rocket().getFlightConfigurations());
+            if isnumeric(ident)
+                cfg = configs(ident);
+            elseif isstring(ident)
+                cfg = configs(string(configs) == ident);
+            end
+            if isempty(cfg)
+                error("No flight configuration found");
+            end
         end
 
         function comp = component(obj, name)
