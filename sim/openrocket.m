@@ -1,6 +1,7 @@
 %% OPENROCKET
-% MATLAB utility class that loads an OpenRocket application and provides many
-% utilities for automating OpenRocket simulations and retreiving calculations.
+% MATLAB utility class that loads an OpenRocket application and wraps
+% underlying Java methods for automating OpenRocket calculations and
+% simulations.
 % 
 % The application startup is translated from <a href="https://github.com/SilentSys/orhelper/blob/master/orhelper/_orhelper.py">SilentSys/orhelper</a>, many thanks for doing the annoying part.
 % 
@@ -57,19 +58,27 @@ classdef openrocket < handle
             % you're trying to call simulate() from some random Toolbox instead
             % of giving a Java error.
 
+            import net.sf.openrocket.simulation.listeners.system.*
+
             flags = string(varargin);
-            if string(sim.getStatus) ~= openrocket.status_uptodate ...
-                    || any(flags == "bypass") % So that repeated calls don't waste time
-                listener_class = "net.sf.openrocket.simulation.listeners.SimulationListener"; 
-                if any(flags == "apogee")
-                    apogee_end = net.sf.openrocket.simulation.listeners.system.ApogeeEndListener;
-                    listeners = javaArray(listener_class, 1);
-                    listeners(1) = apogee_end.INSTANCE;
-                else
-                    listeners = javaArray(listener_class, 0);
-                end
-                sim.simulate(listeners); 
+
+            if string(sim.getStatus) == openrocket.status_uptodate ...
+                    && ~any(flags == "bypass")
+                return;
             end
+
+            listener_class = "net.sf.openrocket.simulation.listeners.SimulationListener"; 
+            listeners = javaArray(listener_class, 1);
+
+            if any(flags == "apogee")
+                listeners(1) = ApogeeEndListener.INSTANCE;
+            elseif any(flags == "recovery")
+                listeners(1) = RecoveryDeviceDeploymentEndListener.INSTANCE;
+            else
+                listeners = javaArray(listener_class, 0);
+            end
+
+            sim.simulate(listeners); 
         end
 
         % https://www.mathworks.com/help/compiler_sdk/java/rules-for-data-conversion-between-java-and-matlab.html
@@ -120,6 +129,7 @@ classdef openrocket < handle
                 names(reco_idx(1)) = "DROGUE";
                 names(reco_idx(2)) = "MAIN";
             end
+
             data.Properties.Events = eventtable(seconds(times), EventLabels = names); 
             data.Properties.VariableUnits = openrocket.units(data.Properties.VariableNames);
             data.Properties.VariableContinuity = repmat("continuous", 1, width(data));
@@ -338,7 +348,7 @@ classdef openrocket < handle
         end
     end
     
-    methods (Static, Access = protected)
+    methods (Static, Access = public)
         function ret = start()
             % Creates barebones OpenRocket application. 
             % This is intended to be called exactly once in a MATLAB session,
@@ -376,10 +386,66 @@ classdef openrocket < handle
         function dict = make_type_map
             % Create flight data type dictionary
             %   Maps name -> FlightDataType object (used by FlightDataBranch.get)
-            types = net.sf.openrocket.simulation.FlightDataType.ALL_TYPES;
-            keys = string(types);
-            keys(keys == "Stability margin calibers") = "Stability margin";
-            dict = dictionary(keys, types);
+            dict = dictionary;
+
+            import net.sf.openrocket.simulation.FlightDataType;
+            dict("Time") = FlightDataType.TYPE_TIME;
+            dict("Altitude") = FlightDataType.TYPE_ALTITUDE;
+            dict("Vertical velocity") = FlightDataType.TYPE_VELOCITY_Z ;
+            dict("Vertical acceleration") = FlightDataType.TYPE_ACCELERATION_Z;
+            dict("Total velocity") = FlightDataType.TYPE_VELOCITY_TOTAL;
+            dict("Total acceleration") = FlightDataType.TYPE_ACCELERATION_TOTAL;
+            dict("Position East of launch") = FlightDataType.TYPE_POSITION_X;
+            dict("Position North of launch") = FlightDataType.TYPE_POSITION_Y;
+            dict("Lateral distance") = FlightDataType.TYPE_POSITION_XY;
+            dict("Lateral direction") = FlightDataType.TYPE_POSITION_DIRECTION;
+            dict("Lateral velocity") = FlightDataType.TYPE_VELOCITY_XY;
+            dict("Lateral acceleration") = FlightDataType.TYPE_ACCELERATION_XY;
+            dict("Latitude") = FlightDataType.TYPE_LATITUDE;
+            dict("Longitude") = FlightDataType.TYPE_LONGITUDE;
+            dict("Gravitational acceleration") = FlightDataType.TYPE_GRAVITY;
+            dict("Angle of attack") = FlightDataType.TYPE_AOA;
+            dict("Roll rate") = FlightDataType.TYPE_ROLL_RATE;
+            dict("Pitch rate") = FlightDataType.TYPE_PITCH_RATE;
+            dict("Yaw rate") = FlightDataType.TYPE_YAW_RATE;
+            dict("Mass") = FlightDataType.TYPE_MASS;
+            dict("Motor mass") = FlightDataType.TYPE_MOTOR_MASS;
+            dict("Longitudinal moment of inertia") = FlightDataType.TYPE_LONGITUDINAL_INERTIA;
+            dict("Rotational moment of inertia") = FlightDataType.TYPE_ROTATIONAL_INERTIA;
+            dict("CP location") = FlightDataType.TYPE_CP_LOCATION;
+            dict("CG location") = FlightDataType.TYPE_CG_LOCATION;
+            dict("Stability margin") = FlightDataType.TYPE_STABILITY;
+            dict("Mach number") = FlightDataType.TYPE_MACH_NUMBER;
+            dict("Reynolds number") = FlightDataType.TYPE_REYNOLDS_NUMBER;
+            dict("Thrust") = FlightDataType.TYPE_THRUST_FORCE;
+            dict("Drag force") = FlightDataType.TYPE_DRAG_FORCE;
+            dict("Drag coefficient") = FlightDataType.TYPE_DRAG_COEFF;
+            dict("Axial drag coefficient") = FlightDataType.TYPE_AXIAL_DRAG_COEFF;
+            dict("Friction drag coefficient") = FlightDataType.TYPE_FRICTION_DRAG_COEFF;
+            dict("Pressure drag coefficient") = FlightDataType.TYPE_PRESSURE_DRAG_COEFF;
+            dict("Base drag coefficient") = FlightDataType.TYPE_BASE_DRAG_COEFF;
+            dict("Normal force coefficient") = FlightDataType.TYPE_NORMAL_FORCE_COEFF;
+            dict("Pitch moment coefficient") = FlightDataType.TYPE_PITCH_MOMENT_COEFF;
+            dict("Yaw moment coefficient") = FlightDataType.TYPE_YAW_MOMENT_COEFF;
+            dict("Side force coefficient") = FlightDataType.TYPE_SIDE_FORCE_COEFF;
+            dict("Roll moment coefficient") = FlightDataType.TYPE_ROLL_MOMENT_COEFF;
+            dict("Roll forcing coefficient") = FlightDataType.TYPE_ROLL_FORCING_COEFF;
+            dict("Roll damping coefficient") = FlightDataType.TYPE_ROLL_DAMPING_COEFF;
+            dict("Pitch damping coefficient") = FlightDataType.TYPE_PITCH_DAMPING_MOMENT_COEFF;
+            dict("Coriolis acceleration") = FlightDataType.TYPE_CORIOLIS_ACCELERATION;
+            dict("Reference length") = FlightDataType.TYPE_REFERENCE_LENGTH;
+            dict("Reference area") = FlightDataType.TYPE_REFERENCE_AREA;
+            dict("Vertical orientation (zenith)") = FlightDataType.TYPE_ORIENTATION_THETA;
+            dict("Lateral orientation (azimuth)") = FlightDataType.TYPE_ORIENTATION_PHI;
+            dict("Wind velocity") = FlightDataType.TYPE_WIND_VELOCITY;
+            dict("Air temperature") = FlightDataType.TYPE_AIR_TEMPERATURE;
+            dict("Air pressure") = FlightDataType.TYPE_AIR_PRESSURE;
+            dict("Speed of sound") = FlightDataType.TYPE_SPEED_OF_SOUND;
+            dict("Simulation time step") = FlightDataType.TYPE_TIME_STEP;
+            dict("Computation time") = FlightDataType.TYPE_COMPUTATION_TIME;
+            % types = net.sf.openrocket.simulation.FlightDataType.ALL_TYPES;
+            % keys = string(types);
+            % dict = dictionary(keys, types)
         end
 
         function dict = make_units_map
