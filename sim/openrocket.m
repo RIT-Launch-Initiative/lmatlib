@@ -3,7 +3,8 @@
 % underlying Java methods for automating OpenRocket calculations and
 % simulations.
 % 
-% The application startup is translated from <a href="https://github.com/SilentSys/orhelper/blob/master/orhelper/_orhelper.py">SilentSys/orhelper</a>, many thanks for doing the annoying part.
+% The application startup is translated from <a href="https://github.com/SilentSys/orhelper/blob/master/orhelper/_orhelper.py">SilentSys/orhelper</a>, many thanks 
+% for doing the annoying part.
 % 
 % PREREQUISITES
 %   - OpenRocket installation, containing jre/ and OpenRocket.jar class file
@@ -14,18 +15,18 @@
 % NOTES 
 %   - Many of OpenRocket's features are, in one way or another, accessible
 %   through the <document> property of this class. 
-%   - Operations cannot be parallelized becuase <parfor> <a href="https://www.mathworks.com/help/parallel-computing/objects-and-handles-in-parfor-loops.html">requires</a> the data 
-%   passed in to support save() and load (), which Java objects in MATLAB do not.
+%   - Operations cannot be parallelized becuase PARFOR <a href="https://www.mathworks.com/help/parallel-computing/objects-and-handles-in-parfor-loops.html">requires</a> the data 
+%   passed in to support SAVE and LOAD, which Java objects in MATLAB do not.
 
 % Written by Yevgeniy Gorbachev
 % November 2024
-classdef openrocket < handle
+classdef (Sealed) openrocket < handle
     
-    properties (SetAccess = protected, GetAccess = public)
+    properties (SetAccess = private, GetAccess = public)
         document; % OpenRocketDocument Java object
     end
 
-    properties (Constant, Access = protected)
+    properties (Constant, Access = private)
         started = openrocket.start(); % dummy constant to ensure start() is called once
 
         types = openrocket.make_type_map(); % Column name to FlightDataType
@@ -40,18 +41,27 @@ classdef openrocket < handle
         reco_name = "RECOVERY_DEVICE_DEPLOYMENT"; % Magic value: Name printed for recovery events
     end
 
-    properties (Access = protected)
+    properties (Access = private)
         file;   % Java File object
         loader; % Java Loader object
     end
 
+%% STATIC UTILITIES
     methods (Static, Access = public)
-        function simulate(sim, varargin)
+        function simulate(sim, params)
             % Simulate an OpenRocket simulation 
-            %   simulate(sim, [, "bypass"][, "apogee"])
+            %   simulate(sim, to_bypass = false, stop = [])
             %       sim         Simulation object
-            %       "bypass"    Bypass up-to-date simulation and re-simulate
-            %       "apogee"    Terminate simulation at apogee
+            %       to_bypass   (Optional) Ignore up-to-date data and
+            %                   re-simulate anyway?
+            %       stop        (Optional) Currently, only supports "apogee" to
+            %                   stop sim at apogee
+            arguments
+                sim
+                params.bypass (1,1) logical = false;
+                params.stop = [];
+            end
+
 
             % NOTE if this is modified, make sure the input to simulate() is
             % exactly the class Java expects - if it isn't, MATLAB thinks
@@ -59,23 +69,19 @@ classdef openrocket < handle
             % of giving a Java error.
 
             import net.sf.openrocket.simulation.listeners.system.*
-
-            flags = string(varargin);
+            listener_class = "net.sf.openrocket.simulation.listeners.SimulationListener"; 
 
             if string(sim.getStatus) == openrocket.status_uptodate ...
-                    && ~any(flags == "bypass")
+                    && ~params.bypass
                 return;
             end
 
-            listener_class = "net.sf.openrocket.simulation.listeners.SimulationListener"; 
             listeners = javaArray(listener_class, 1);
 
-            if any(flags == "apogee")
-                listeners(1) = ApogeeEndListener.INSTANCE;
-            elseif any(flags == "recovery")
-                listeners(1) = RecoveryDeviceDeploymentEndListener.INSTANCE;
+            if params.stop == "apogee"
+                listeners(1) = OptimumCoastListener.INSTANCE;
             else
-                listeners = javaArray(listener_class, 0);
+                listeners = javaArray(listener_claGss, 0);
             end
 
             sim.simulate(listeners); 
@@ -125,9 +131,12 @@ classdef openrocket < handle
             names = arrayfun(@(ev) string(ev.getType().name()), evs);
             times = arrayfun(@(ev) ev.getTime(), evs);
             reco_idx = find(names == openrocket.reco_name);
-            if length(reco_idx) == 2
-                names(reco_idx(1)) = "DROGUE";
-                names(reco_idx(2)) = "MAIN";
+            switch length(reco_idx)
+                case 1
+                    names(reco_idx(1)) = "MAIN";
+                case 2
+                    names(reco_idx(1)) = "DROGUE";
+                    names(reco_idx(2)) = "MAIN";
             end
 
             data.Properties.Events = eventtable(seconds(times), EventLabels = names); 
@@ -143,6 +152,7 @@ classdef openrocket < handle
         end
     end
 
+%% COMPONENT METHODS
     methods 
         function obj = openrocket(orkpath)
             % Construct openrocket object from path to OpenRocket file
@@ -226,22 +236,22 @@ classdef openrocket < handle
             obj.rocket().setSelectedConfiguration(cfg.getId);
         end
 
-        function comp = component(obj, name)
+        function parts = component(obj, name)
             % Search entire Rocket for component name
             %   component = or.component(name)
 
-            parts = obj.rocket().getAllChildren();
-            parts = toArray(parts);
-            names = string(parts);
-            found = find(names == name);
-            if isempty(found)
-                error("Could not find component '%s' in rocket", name);
-            elseif length(found) >= 2
-                error("Found %d components matching '%s'", length(found), name);
+            rkt = obj.rocket();
+            parts = openrocket.search_components(rkt, name = name);
+            if isempty(parts)
+                error("Could not find part '%s'", name);
+            elseif length(parts) >= 2
+                error("Found %d components named '%s'", length(parts), name);
             end
-            comp = parts(found);
         end
 
+
+%% AERODYNAMIC CALCULATIONS
+    methods 
         function fc = flight_condition(obj, mach, aoa, theta, rpy_rate)
             % Get FlightCondition object for given inputs
             %   fc = flight_condition(obj, mach, aoa, theta, rpy_rate)
@@ -388,7 +398,10 @@ classdef openrocket < handle
             %   Maps name -> FlightDataType object (used by FlightDataBranch.get)
             dict = dictionary;
 
+
             import net.sf.openrocket.simulation.FlightDataType;
+            % Using FlightDataType.ALL_TYPES does not always correctly recover
+            % the string representations
             dict("Time") = FlightDataType.TYPE_TIME;
             dict("Altitude") = FlightDataType.TYPE_ALTITUDE;
             dict("Vertical velocity") = FlightDataType.TYPE_VELOCITY_Z ;
@@ -443,9 +456,6 @@ classdef openrocket < handle
             dict("Speed of sound") = FlightDataType.TYPE_SPEED_OF_SOUND;
             dict("Simulation time step") = FlightDataType.TYPE_TIME_STEP;
             dict("Computation time") = FlightDataType.TYPE_COMPUTATION_TIME;
-            % types = net.sf.openrocket.simulation.FlightDataType.ALL_TYPES;
-            % keys = string(types);
-            % dict = dictionary(keys, types)
         end
 
         function dict = make_units_map
@@ -469,7 +479,32 @@ classdef openrocket < handle
             doubles = double(double_arr);
             % slight speed improvment over <list = double(toArray(jarr))>;
         end
+
+        function parts = search_components(rkt, mode, key)
+            arguments
+                rkt
+                mode (1,1) string;
+                key (1,1) string;
+            end 
+
+            parts = rkt.getAllChildren().toArray();
+            switch (mode)
+                case "name"
+                    match = string(parts) == key;
+                case "class"
+                    jclass = sprintf("net.sf.openrocket.rocketcomponent.%s", key);
+                    match = false(size(parts));
+                    for i_part = 1:numel(parts)
+                        match(i_part) = isa(parts(i_part), jclass);
+                    end
+                otherwise
+                    error("Search mode '%s' not recognized", mode);
+            end
+            parts = parts(match);
+        end
+
     end
+
     
 end
 
