@@ -8,15 +8,20 @@
 % 
 % PREREQUISITES
 %   - OpenRocket installation, containing jre/ and OpenRocket.jar class file
-%   - Version of MATLAB <a href="https://www.mathworks.com/support/requirements/openjdk.html">compatible</a> with the Java version used by OpenRocket
-%   (Current OR 23.09 uses JDK 17, which requires MATLAB 2024a or newer)
+%   - Version of MATLAB <a href="https://www.mathworks.com/support/requirements/openjdk.html">compatible</a> with the Java version used by OpenRocket. 
+%   At time of writing, the latest release is OR 23.09 using JDK 17, which
+%   requires MATLAB 2024a or newer
 %   - Set up Java class path and Java environment using openrocket_setup(...)
 %   
 % NOTES 
-%   - Many of OpenRocket's features are, in one way or another, accessible
-%   through the <document> property of this class. 
+%   - MATLAB's integration with Java is fairly robust, so many of OpenRocket's
+%   features are reasonably straightforward to access through the <document>
+%   member or the Java objects returned by the utility methods. To view the
+%   methods exposed by an object, use methodsview. For example,
+%       sim = or.sims(1);
+%       methodsview(class(sim));
 %   - Operations cannot be parallelized becuase PARFOR <a href="https://www.mathworks.com/help/parallel-computing/objects-and-handles-in-parfor-loops.html">requires</a> the data 
-%   passed in to support SAVE and LOAD, which Java objects in MATLAB do not.
+%   passed in to support SAVE and LOAD, which Java objects in MATLAB do not
 
 % Written by Yevgeniy Gorbachev
 % November 2024
@@ -48,44 +53,6 @@ classdef (Sealed) openrocket < handle
 
 %% STATIC UTILITIES
     methods (Static, Access = public)
-        function simulate(sim, params)
-            % Simulate an OpenRocket simulation 
-            %   simulate(sim, to_bypass = false, stop = [])
-            %       sim         Simulation object
-            %       to_bypass   (Optional) Ignore up-to-date data and
-            %                   re-simulate anyway?
-            %       stop        (Optional) Currently, only supports "apogee" to
-            %                   stop sim at apogee
-            arguments
-                sim
-                params.bypass (1,1) logical = false;
-                params.stop = [];
-            end
-
-
-            % NOTE if this is modified, make sure the input to simulate() is
-            % exactly the class Java expects - if it isn't, MATLAB thinks
-            % you're trying to call simulate() from some random Toolbox instead
-            % of giving a Java error.
-
-            import net.sf.openrocket.simulation.listeners.system.*
-            listener_class = "net.sf.openrocket.simulation.listeners.SimulationListener"; 
-
-            if string(sim.getStatus) == openrocket.status_uptodate ...
-                    && ~params.bypass
-                return;
-            end
-
-            listeners = javaArray(listener_class, 1);
-
-            if params.stop == "apogee"
-                listeners(1) = OptimumCoastListener.INSTANCE;
-            else
-                listeners = javaArray(listener_claGss, 0);
-            end
-
-            sim.simulate(listeners); 
-        end
 
         % https://www.mathworks.com/help/compiler_sdk/java/rules-for-data-conversion-between-java-and-matlab.html
         function data = get_data(sim, variables)
@@ -95,17 +62,18 @@ classdef (Sealed) openrocket < handle
             %   variables   (Optional) list of variables to return
             %               Defaults to add all of them
             % 
-            % NOTE Automatically simulates outdated simulation. If you want to
-            % pass flags ("bypass" or "apogee") to simulate(), call simulate()
-            % with those flags, then get_data().
+            % NOTE Does not automatically simulate outdated simulation
             % NOTE All variables are unitless or MKS
             arguments
                 sim
                 variables string = openrocket.types.keys;
             end
 
+            if string(sim.getStatus) ~= openrocket.status_uptodate
+                error("Simulation not up to date. Please remember to run openrocket.simulate().");
+            end
+
             variables = variables(variables ~= openrocket.time_name);
-            openrocket.simulate(sim); % Ensure simulation is up to date
             branch = sim.getSimulatedData().getBranch(0); % NOTE assumes branch 0
 
             % Create destination timetable
@@ -197,6 +165,8 @@ classdef (Sealed) openrocket < handle
             elseif isstring(sim)
                 names = arrayfun(@(sim) string(sim.getName()), sims);
                 out = sims(names == sim);
+            else 
+                error("Identifier not supported");
             end
         end
 
@@ -249,9 +219,82 @@ classdef (Sealed) openrocket < handle
             end
         end
 
+        function data = simulate(obj, ident, params)
+            % Simulate an OpenRocket simulation 
+            %   or.simulate(ident, stop = "", outputs = "")
+            %       ident       Simulation number, or name, or object (returned fom sims(...))
+            %       stop        (Optional) Currently, only supports "apogee" to
+            %                   stop sim at apogee
+            %       outputs     (Optional) Convert flight data
+            %                   String array e.g. ["Altitude", "Stability margin"]
+            %                   OUT 
+            %                   true (logical) outputs all values
+            %   EXAMPLES
+            %       or = openrocket("data/OTIS.ork");
+            %       sim = or.sims(1);
+            %       % Simulate using object, up to apogee
+            %       or.sim(sim, stop = "apogee"); 
+            %       % Simulate first simulation and assign all outputs
+            %       data = or.sim(1, output = "ALL");  
+            %       % Simulate named simulation, get stability data
+            %       data = or.sim("15MPH-SA", output = "Stability margin"); 
+
+            arguments
+                obj openrocket
+                ident
+                params.stop (1, 1) string = "";
+                params.outputs (1, :) string = [];
+            end
+
+
+            % NOTE if this is modified, make sure the input to simulate() is
+            % exactly the class Java expects - if it isn't, MATLAB thinks
+            % you're trying to call simulate() from some random Toolbox instead
+            % of giving a Java error.
+
+            import net.sf.openrocket.simulation.listeners.system.*
+            listener_class = "net.sf.openrocket.simulation.listeners.SimulationListener"; 
+            
+            if isa(ident, "net.sf.openrocket.document.Simulation")
+                sim = ident;
+            else
+                sim = obj.sims(ident);
+            end
+
+            if length(sim) ~= 1
+                error("More than one simulation specified:\n%s", mat2str(sims));
+            end
+
+            outs = params.outputs;
+            if isempty(outs) && nargout > 0
+                error("Simulation output assigned but not requested");
+            elseif ~isempty(outs) && nargout == 0
+                warning("Performance penalty: simulation output requested but not assigned.");
+            end
+
+            listeners = javaArray(listener_class, 1);
+
+            if params.stop == ""
+                listeners = javaArray(listener_class, 0);
+            elseif params.stop == "apogee"
+                listeners(1) = OptimumCoastListener.INSTANCE;
+            end
+
+            sim.simulate(listeners);
+            
+            if ~isempty(outs) && nargout > 0
+                if outs == "ALL"
+                    data = openrocket.get_data(sim);
+                else
+                    data = openrocket.get_data(sim, outs);
+                end
+            end
+        end
+    end
+
 
 %% AERODYNAMIC CALCULATIONS
-    methods 
+    methods
         function fc = flight_condition(obj, mach, aoa, theta, rpy_rate)
             % Get FlightCondition object for given inputs
             %   fc = flight_condition(obj, mach, aoa, theta, rpy_rate)
@@ -358,7 +401,7 @@ classdef (Sealed) openrocket < handle
         end
     end
     
-    methods (Static, Access = public)
+    methods (Static, Access = private)
         function ret = start()
             % Creates barebones OpenRocket application. 
             % This is intended to be called exactly once in a MATLAB session,
@@ -373,16 +416,18 @@ classdef (Sealed) openrocket < handle
                 error("No 'openrocket.jar' (case-insensitive) found on static class path.")
             end
 
-            wb = waitbar(0, "Creating application modules...");
+            wb = waitbar(0, "Starting OpenRocket modules..");
             gui_module = net.sf.openrocket.startup.GuiModule();
+            waitbar(0.2, wb);
             plugin_module = net.sf.openrocket.plugin.PluginModule();
+            waitbar(0.4, wb)
             injector = com.google.inject.Guice.createInjector([gui_module, plugin_module]);
+            waitbar(0.6, wb)
             net.sf.openrocket.startup.Application.setInjector(injector);
-
-            waitbar(0.5, wb, "Loading...");
+            waitbar(0.8, wb);
             gui_module.startLoader();
 
-            waitbar(0.9, wb, "Configuring logger...");
+            waitbar(0.9, wb);
             logger = org.slf4j.LoggerFactory.getLogger(...
                 ch.qos.logback.classic.Logger.ROOT_LOGGER_NAME);
             level = ch.qos.logback.classic.Level.ERROR;
