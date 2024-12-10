@@ -1,11 +1,11 @@
 clear; close all;
 
 %% Basic plots
-
 otis = openrocket("data/OTIS.ork");
 sim = otis.sims(1); % get simulation by number (name also works)
 otis.simulate(sim); % execute simulation
 data = openrocket.get_data(sim); % get all of the simulation's outputs
+% equivalently, data = otis.simulate(sim, outputs = "ALL") will do the same thing
 
 figure(name = "Basic plots");
 tiledlayout(2,1);
@@ -21,7 +21,8 @@ plot_openrocket(data, "Stability margin", "Angle of attack", ...
 %% Fin height sweep
 otis = openrocket("data/OTIS.ork");
 sim = otis.sims("20MPH-SA");
-fins = otis.component("Trapezoidal Fins");
+fins = otis.shortname("fins");
+% fins = otis.component("Trapezoidal Fins");
 fh = fins.getHeight();
 
 heights = fh * (0.8:0.05:1.2); % vary height from 80% to 120%
@@ -42,7 +43,8 @@ for i = 1:length(heights)
     ssm_reference(i) = otis.stability("LAUNCH", ref_fcond);
 
     % Simulate 
-    data = otis.simulate(sim, stop = "apogee", outputs = "Stability margin"); 
+    data = otis.simulate(sim, stop = seconds(3), outputs = "Stability margin"); 
+    % stop at 3 seconds to not simulate much after burnout - significant performance benefit
 
     % Cut data to range of interest
     data_range = timerange(eventfilter("LAUNCHROD"), eventfilter("BURNOUT"), "openleft");
@@ -79,6 +81,7 @@ sim = otis.sims("15MPH-SA");
 opts = sim.getOptions();
 opts.setWindTurbulenceIntensity(0.15);
 opts.setLaunchRodDirection(deg2rad(60));
+opts.setTimeStep(0.05); % lower rate to improve performacne
 
 launch_angle = opts.getLaunchRodAngle();
 wind_speed = opts.getWindSpeedAverage();
@@ -113,9 +116,7 @@ otis = openrocket("data/OTIS.ork");
 sim = otis.sims("15MPH-SA");
 weight_opt_cost = make_cost_function(otis, sim, "Adjustable stability weight");
 
-% Tolerance of 0.1m in altitude - more precise is not reasonable
-% Tolerance of 10g in mass - more precise is not reasonable
-% For fminsearch, tolerances are absolute - see https://www.mathworks.com/help/optim/ug/tolerance-details.html
+% see https://www.mathworks.com/help/optim/ug/tolerance-details.html
 opts = optimset(Display = "iter", TolFun = 0.1, TolX = 10e-3); 
 opt_weight = fminsearch(weight_opt_cost, 1.5, opts);
 
@@ -150,4 +151,3 @@ function func = make_cost_function(doc, sim, tuned_name)
         f = abs(apogee_error);
     end        
 end
-
