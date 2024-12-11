@@ -53,6 +53,8 @@
 % part = or.component(name)             :get component(s) by name
 % part = or.shortname(name)             :get common key components by name -
 %   "main", "drogue", etc.
+% event = or.get_deploy(chute[, sim])   :get deployment event for a specific parachute, 
+%   optionally for a specific sim
 % -----------------------------------------------------------------------------------
 % Simulation methods
 % 
@@ -127,9 +129,12 @@ classdef (Sealed) openrocket < handle
             % NOTE Does not automatically simulate outdated simulation
             % NOTE All variables are unitless or MKS
             arguments
-                sim
+                sim {openrocket.check_class(sim, "document.Simulation")};
                 variables string = openrocket.types.keys;
             end
+
+            openrocket.check_strings(variables, openrocket.types.keys, ...
+                "Invalid value for <variables>. ")
 
             if string(sim.getStatus) ~= openrocket.status_uptodate
                 error("Simulation not up to date. Please remember to run openrocket.simulate().");
@@ -175,13 +180,14 @@ classdef (Sealed) openrocket < handle
             data.Properties.Description = "openrocket"; % Identify as OpenRocket import
         end
 
-        function parts = search_components(rkt, mode, key)
+        function parts = search_components(parent, params)
             % Search rocket for components
-            % parts = search_components(rkt, mode, key)
-            %   rkt     Rocket object (or subcomponent)
-            %   mode    Search by name or Java class
-            %   key     If mode is "name", the component's (case-sensitive) editor name.
-            %           If mode is "class", a (super) class under openrocket.rocketcomponent.(...)
+            % parts = search_components(parent, class = <component class name>)
+            %   parent  Rocket object (or subcomponent)
+            %   class   Java class name under net.sf.openrocket.rocketcomponent
+            % parts = search_components(parent, name = <component name>)
+            %   parent  Rocket object (or subcomponent)
+            %   name    Case-sensitive name
             %   
             %   EXAMPLES
             %   or = openrocket("test.ork");
@@ -189,30 +195,54 @@ classdef (Sealed) openrocket < handle
             %   streamer = openrocket.search_components(or.rocket(), name = "Streamer");
 
             arguments
-                rkt
-                mode (1,1) string;
-                key (1,1) string;
+                parent {openrocket.check_class(parent, ...
+                    "rocketcomponent.RocketComponent")};
+                params.name (1,1) string = "";
+                params.class (1,1) string = "";
             end 
 
-            if ~isa(rkt, "net.sf.openrocket.rocketcomponent.RocketComponent")
-                error("First argument must be a Rocket (or component thereof)");
+            if params.name == "" && params.class == ""
+                error("Specify name or class");
+            elseif params.name ~= "" && params.class ~= ""
+                error("Specify name or class, not both");
             end
 
-            parts = rkt.getAllChildren().toArray();
-            switch (mode)
-                case "name"
-                    match = string(parts) == key;
-                case "class"
-                    jclass = sprintf("net.sf.openrocket.rocketcomponent.%s", key);
-                    match = false(size(parts));
-                    for i_part = 1:numel(parts)
-                        match(i_part) = isa(parts(i_part), jclass);
-                    end
-                otherwise
-                    error("Search mode '%s' not recognized", mode);
+            parts = parent.getAllChildren().toArray();
+            if params.name ~= ""
+                match = string(parts) == params.name;
+            elseif params.class ~= ""
+                jclass = sprintf("net.sf.openrocket.rocketcomponent.%s", params.class);
+                match = false(size(parts));
+                for i_part = 1:numel(parts)
+                    match(i_part) = isa(parts(i_part), jclass);
+                end
             end
+
             parts = parts(match);
         end
+
+
+        % Copy a flight configuration to do weird stuff without modifying the document
+        function copy = copy_config(cfg, name)
+            arguments
+                cfg {openrocket.check_class(cfg, "rocketcomponent.FlightConfiguration")}
+                name (1,1) string = string(cfg.getName) + " Copy";
+            end
+
+            copy = cfg.copy([]);
+            rkt = cfg.getRocket;
+            configables = openrocket.search_components(rkt, class = "FlightConfigurableComponent");
+            for i = 1:length(configables)
+                configables(i).copyFlightConfiguration(cfg.getId, copy.getId);
+            end
+
+            if nargin == 1
+                copy.setName(string(copy.getName) + " Copy");
+            elseif nargin == 2
+                copy.setName(name);
+            end
+        end
+
 
         function vars = list_variables
             % List available flight data types
@@ -418,10 +448,11 @@ classdef (Sealed) openrocket < handle
             %           "mount": motor mount
             %           "nose": nose cone
             %   multiple = true allows return of multiple parts, defaults to false
-            %
+            
             arguments
                 obj openrocket;
-                name (1,1) string;
+                name (1,1) string {openrocket.check_strings(name, ...
+                    ["drogue", "main", "fins", "mount", "nose"])};
                 multiple (1,1) logical = false;
             end
 
@@ -450,7 +481,7 @@ classdef (Sealed) openrocket < handle
                         to_return(i) = dep_cfg.getDeployEvent == dep_cfg.getDeployEvent.ALTITUDE;
                     end
                     % If there is only one parachute, it is always main
-                    if numel(chutes) == 1
+                    if isscalar(chutes)
                         to_return = true;
                     end
                     part = chutes(to_return);
@@ -465,8 +496,6 @@ classdef (Sealed) openrocket < handle
                     part = mounts(to_return);
                 case "nose"
                     part = openrocket.search_components(rkt, class = "NoseCone");
-                otherwise 
-                    error("Short-name '%s' not recognized");
             end
 
             if isempty(part) 
@@ -476,6 +505,31 @@ classdef (Sealed) openrocket < handle
             end
         end
 
+        function dev = get_deploy(obj, chute, sim)
+            % Get the deployment event for a recovery device
+            %   event = or.get_deploy(chute)
+            %       Use the globally selected flight configuration
+            %   event = or.get_deploy(chute, sim)
+            %       Use the simulation's specific flight configuration
+            % Set the event's recovery configuration using the methods
+            %    event.setRecoveryEvent(event.APOGEE);
+            %   event.set
+            arguments
+                obj openrocket
+                chute {openrocket.check_class(chute, "rocketcomponent.RecoveryDevice")};
+                sim = [];
+            end
+
+            if isempty(sim)
+                id = obj.document.getSelectedConfiguration.getId;
+            else
+                openrocket.check_class(sim, "document.Simulation", ...
+                    "Simulation argument used. ");
+                id = sim.getFlightConfigurationId;
+            end
+
+            dev = chute.getDeploymentConfigurations.get(id);
+        end
     end
 
 
@@ -498,6 +552,7 @@ classdef (Sealed) openrocket < handle
                 theta (1,1) double = 0;
                 rpy_rate (3,1) double = [0; 0; 0];
             end
+
             cfg = obj.get_config();
             fc = net.sf.openrocket.aerodynamics.FlightConditions(cfg);
             fc.setMach(mach);
@@ -513,6 +568,10 @@ classdef (Sealed) openrocket < handle
             %   forces = or.aerodata6(fc)
             %       returns an AerodynamicForces object, in which individual
             %       coefficients are accessed through their Java accessors
+            arguments
+                obj openrocket;
+                fc {openrocket.check_class(fc, "aerodynamics.FlightConditions")};
+            end
 
             cfg = obj.get_config();
             data = openrocket.barrowman.getAerodynamicForces(cfg, fc, openrocket.warnings);
@@ -526,6 +585,10 @@ classdef (Sealed) openrocket < handle
             %       CN      Normal force coefficient
             %       CM      Pitching moment coefficient
             %       CNa     Normal force derivative
+            arguments
+                obj openrocket;
+                fc {openrocket.check_class(fc, "aerodynamics.FlightConditions")};
+            end
 
             cfg = obj.get_config();
             data = openrocket.barrowman.getAerodynamicForces(cfg, fc, openrocket.warnings);
@@ -556,6 +619,10 @@ classdef (Sealed) openrocket < handle
             %       CG      Center of mass (from nose, m)
             %       mass    Vehicle mass (kg)
             %       moi     Principal moments about [roll; pitch; yaw] (kg*m^2)
+            arguments
+                obj openrocket;
+                state (1,1) string {openrocket.check_strings(state, ["LAUNCH", "BURNOUT"])};
+            end
 
             cfg = obj.get_config();
             switch state
@@ -563,8 +630,6 @@ classdef (Sealed) openrocket < handle
                     data = openrocket.masscalc.calculateLaunch(cfg);
                 case "BURNOUT"
                     data = openrocket.masscalc.calculateBurnout(cfg);
-                otherwise 
-                    error("Unrecognized flight state '%s'", state)
             end
             CG = data.getCM.x;
             mass = data.getMass;
@@ -578,6 +643,11 @@ classdef (Sealed) openrocket < handle
             %       fc      FlightCondition
             %       
             %       ssm     Stability margin, in calibers
+            arguments
+                obj openrocket;
+                state (1,1) string {openrocket.check_strings(state, ["LAUNCH", "BURNOUT"])};
+                fc {openrocket.check_class(fc, "aerodynamics.FlightConditions")};
+            end
 
             cfg = obj.get_config();
             CP3 = openrocket.barrowman.getCP(cfg, fc, openrocket.warnings);
@@ -712,8 +782,46 @@ classdef (Sealed) openrocket < handle
             % slight speed improvment over <list = double(toArray(jarr))>;
         end
 
-    end
+        function check_class(input, classname, prefix)
+            % Validate that the input is or inherits from the specified class name 
+            % Prepends net.sf.openrocket - not necessary for MATLAB types, which support direct validation
+            arguments
+                input
+                classname (1,1) string;
+                prefix (1,1) string = "";
+            end
+            fullname = "net.sf.openrocket." + classname;
+            if ~isa(input, fullname)
+                ME = MException("openrocket:invalid_type", ...
+                    sprintf("\n%sExpected %s\nGot %s", prefix, fullname, class(input)));
+                throwAsCaller(ME);
+            end
+        end
 
-    
+        function check_strings(input, strings, prefix)
+            % Validate that all members of the input are in the defined strings
+            arguments
+                input string;
+                strings string;
+                prefix (1,1) string = "";
+            end
+            isn_t = find(~ismember(input, strings));
+            if isempty(isn_t)
+                return;
+            end
+
+            string_print = compose("\t%s\n", strings).join("");
+            if isscalar(input)
+                text = "Input must be one of";
+            elseif isscalar(isn_t)
+                text = sprintf("Input at index %d is '%s', must be one of", input(isn_t), isn_t);
+            else
+                text = sprintf("Input at index %s must be one of", mat2str(isn_t));
+            end
+
+            ME = MException("openrocket:invalid_value", sprintf("%s%s\n%s", prefix, text, string_print));
+            throwAsCaller(ME);
+        end
+    end
 end
 

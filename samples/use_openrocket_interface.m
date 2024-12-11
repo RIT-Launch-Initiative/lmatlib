@@ -3,6 +3,11 @@ clear; close all;
 %% Basic plots
 otis = openrocket("data/OTIS.ork");
 sim = otis.sims(1); % get simulation by number (name also works)
+
+drogue = otis.shortname("drogue"); % get shortcut to drogue chute
+event = otis.get_deploy(drogue, sim); % get event for drogue chute
+event.setDeployDelay(3); % 3-second drogue delay
+
 otis.simulate(sim); % execute simulation
 data = openrocket.get_data(sim); % get all of the simulation's outputs
 % equivalently, data = otis.simulate(sim, outputs = "ALL") will do the same thing
@@ -116,8 +121,9 @@ otis = openrocket("data/OTIS.ork");
 sim = otis.sims("15MPH-SA");
 weight_opt_cost = make_cost_function(otis, sim, "Adjustable stability weight");
 
-% see https://www.mathworks.com/help/optim/ug/tolerance-details.html
-opts = optimset(Display = "iter", TolFun = 0.1, TolX = 10e-3); 
+% see https://www.mathworks.com/help/optim/ug/output-function.html#f11454
+stop_close_enough = @(~, optim_values, ~) optim_values.fval <= 0.1; % stop sim when we are within 0.1m
+opts = optimset(Display = "iter", OutputFcn = stop_close_enough); 
 opt_weight = fminsearch(weight_opt_cost, 1.5, opts);
 
 % sim.getOptions().setWindTurbulenceIntensity(0);
