@@ -6,132 +6,97 @@
 % - 
 
 classdef (Sealed) nwpdata
-    properties
-        data (:, :, :) double;
-        raster map.rasterref.MapPostingsReference;
-        levels (1, :) double;
-        comment (1, 1) string;
-    end
-
     properties (Constant)
         sfc_match = "0-SFC";
         isbl_match = "(\d+)-ISBL";
     end
 
-    methods
-        function obj = nwpdata(path, element, lat, lon, side)
-            arguments
-                path (1,1) string;
-                element (1,1) string;
-                lat (1,1) double;
-                lon (1,1) double;
-                side (1,1) double = 0;
-            end
-
-            tic;
-            fprintf("Reading raster information...\n");
-            info = georasterinfo(path);
-            toc;
-
-            meta = info.Metadata;
-            raster = info.RasterReference;
-
-            [x_c, y_c] = projfwd(raster.ProjectedCRS, lat, lon);
-            if side == 0
-                x_length = raster.SampleSpacingInWorldX;
-                y_length = raster.SampleSpacingInWorldY;
-            else
-                x_length = side;
-                y_length = side;
-            end
-            x_lims = x_c + x_length/2*[-1/2 1/2];
-            y_lims = y_c + y_length/2*[-1/2 1/2];
-
-            
-            element = "^" + element + "$";
-            level = "^" + nwpdata.isbl_match + "$";
-            
-            element_idx = ~cellfun(@isempty, regexp(meta.Element, element));
-            level_idx = ~cellfun(@isempty, regexp(meta.ShortName, level));
-            bands = find(element_idx & level_idx);
-            if isempty(bands)
-                error("No matching bands found");
-            end
-
-            tic;
-            fprintf("Reading %d bands from %s.\n", length(bands), info.Filename)
-            [data, rast] = readgeoraster(info.Filename, Bands = bands);
-            toc;
-
-            meta = meta(bands, :);
-            [data, rast] = mapcrop(data, rast, x_lims, y_lims);
-            levels_str = string(regexp(meta.ShortName, level, "tokens"));
-            levels = str2double(levels_str);
-            [levels, reorder] = sort(levels, "descend");
-            
-            obj.data = data(:, :, reorder);
-            obj.raster = rast;
-            obj.levels = levels;
-        end
-    end
-
     methods (Static)
-        function [data, raster, levels, comment] = read_baro(info, element, x_lims, y_lims)
-            level = nwpdata.isbl_match;
-            bands = nwpdata.find_bands(element, level);
+        function [tab] = read_tables(info, elements, lat, lon)
+            tab = table;
+            for element = elements
+                [data, levels, bands] = nwpdata.read_baro(info, element, lat, lon);          
+                [levels, order] = sort(levels, "descend");
+                tab_element = table(levels(:), data(order), ...
+                    VariableNames = ["ISBL", element]);
+
+                metadata = info.Metadata(bands(1), :);
+                tab_element.Properties.VariableUnits = ["[Pa]", metadata.Unit];
+                tab_element.Properties.VariableDescriptions = ["Isobaric surface", ...
+                    metadata.Comment];
+
+                if isempty(tab)
+                    tab = tab_element;
+                else
+                    tab = innerjoin(tab, tab_element, Keys = "ISBL");
+                end
+            end
             
+            % Assign table metadata
+            [~, name, ~] = fileparts(info.Filename);
+            grid_name = regexp(name, "([A-Za-z]+_\d+?)_", "tokens");
+            if isempty(grid_name)
+                warning("Could not identify grid name");
+                name = "unknown";
+            else
+                name = grid_name{1};
+            end
+
+            tab.Properties.UserData = struct(lat = lat, lon = lon, ...
+                time = metadata.ReferenceTime(1), ...
+                grid = name);
+        end
+
+        function [data, bands] = read_surf(info, element, lat, lon)
+            sfc_level = "0-SFC";
+            metadata = info.Metadata;
+
+            bands = nwpdata.find_bands(metadata, element, sfc_level);
             if isempty(bands)
-                error("No matching bands found");
+                error("No bands found")
             end
 
-            tic;
-            fprintf("Reading %d band(s) from %s.\n", length(bands), info.Filename)
-            [data, rast] = readgeoraster(info.Filename, Bands = bands);
+            fprintf("Reading %d bands from raster %s...\n", length(bands), info.Filename);
+            tic; 
+            [data, raster] = readgeoraster(info.Filename, Bands = bands); 
             toc;
-
-            meta = meta(bands, :);
-            comment = meta(1, "Comment");
-
-            [data, rast] = mapcrop(data, rast, x_lims, y_lims);
-            levels_str = string(regexp(meta.ShortName, "^" + level + "$", "tokens"));
-            levels = str2double(levels_str);
-            [levels, reorder] = sort(levels, "descend");
-
-            data = data(:, :, reorder);
         end
 
-        function [data, raster] = read_flat(element, level, x_lims, y_lims)
-            bands = nwpdata.find_bands(element, level);
-            if ~isscalar(bands)
-                error("%d bands matching '%s' found, expected one", length(bands), level);
-            end
-
-            tic;
-            fprintf("Reading %d band(s) from %s.\n", length(bands), info.Filename)
-            [data, rast] = readgeoraster(info.Filename, Bands = bands);
-            toc;
-
-            meta = meta(bands, :);
-            comment = meta.Comment;
-            [data, rast] = mapcrop(data, rast, x_lims, y_lims);
-        end
-
-        function bands = find_bands(element, level)
-            element = "^" + element + "$";
-            level = "^" + level + "$";
+        function [data, levels, bands] = read_baro(info, element, lat, lon)
+            baro_level = "(\d+)-ISBL";
             
-            element_idx = ~cellfun(@isempty, regexp(meta.Element, element));
-            level_idx = ~cellfun(@isempty, regexp(meta.ShortName, level));
-            bands = find(element_idx & level_idx);
+            metadata = info.Metadata;
+            bands = nwpdata.find_bands(metadata, element, baro_level);
+            if isempty(bands)
+                error("No bands found")
+            end
+
+            metadata = metadata(bands, :);
+            levels_str = string(regexp(metadata.ShortName, baro_level, "tokens"));
+            levels = str2double(levels_str);
+
+
+            fprintf("Reading %d bands from raster %s...\n", length(bands), info.Filename);
+            tic; 
+            [data, raster] = readgeoraster(info.Filename, Bands = bands); 
+            toc;
+
+            data = nwpdata.get_point(data, raster, lat, lon);
+            data = squeeze(data);
         end
 
-        function dict = make_types
-            dict("UGRD") = "wind-east";
-            dict("VGRD") = "wind-north";
-            dict("DZDT") = "wind-up";
-            dict("ABSV") = "vorticity";
-            dict("TMP") = "temperature";
-            dict("HGT") = "height";
+        function [data_point, lat, lon] = get_point(data, raster, lat, lon)
+            [x_c, y_c] = projfwd(raster.ProjectedCRS, lat, lon);
+            x_lims = x_c + raster.SampleSpacingInWorldX/2*[-1 1];
+            y_lims = y_c + raster.SampleSpacingInWorldY/2*[-1 1];
+            [data_point, ~] = mapcrop(data, raster, x_lims, y_lims);
+            data_point = squeeze(data_point(2, 2, :));
+        end
+
+        function bands = find_bands(metadata, element, level)
+            element_idx = ~cellfun(@isempty, regexp(metadata.Element, element));
+            level_idx = ~cellfun(@isempty, regexp(metadata.ShortName, level));
+            bands = find(element_idx & level_idx);
         end
     end
 end
