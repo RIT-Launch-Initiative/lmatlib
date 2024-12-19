@@ -106,7 +106,7 @@ classdef (Sealed) nwpdata < matlab.mixin.indexing.RedefinesParen
                     obj.metadata = [obj.metadata; metadata(bands(1), :)];
                 end
                 % [data, ~] = readgeoraster(path, Bands = bands);
-                %
+                
                 % obj.data(1, :, :, 1, :) = data(y_idx, x_idx, :);
                 % obj.metadata = metadata(bands, :);
                 % obj.levels = [];
@@ -143,6 +143,7 @@ classdef (Sealed) nwpdata < matlab.mixin.indexing.RedefinesParen
 methods (Access=protected)
     % The acutal indexing logic lives in (index_vectors) and are further broken
     % out into index_(...) for maintainability
+
     function obj = parenReference(obj, indexOp)
         indices = indexOp.Indices;
         times = obj.time_index(indices{1});
@@ -157,27 +158,15 @@ methods (Access=protected)
         obj.metadata = obj.metadata(qties, :);
     end
 
-    function obj = parenAssign(obj,indexOp,varargin)
+    function parenAssign(~, ~, ~)
         error("Paren assignment not supported");
-        % % Ensure object instance is the first argument of call.
-        % if isempty(obj)
-        %     obj = varargin{1};
-        % end
-        % if isscalar(indexOp)
-        %     assert(nargin==3);
-        %     rhs = varargin{1};
-        %     obj.ContainedArray.(indexOp) = rhs.ContainedArray;
-        %     return;
-        % end
-        
-        % [obj.(indexOp(2:end))] = varargin{:};
     end
 
     function n = parenListLength(~, ~, ~)
         n = 1;
     end
 
-    function obj = parenDelete(~, ~, ~)
+    function parenDelete(~, ~, ~)
         error("Paren deletion not supported");
     end
 
@@ -243,13 +232,8 @@ end
 
 methods (Access=public)
     function out = value(obj)
-        out = squeeze(obj.data);
+        out = obj.data;
     end
-
-    % function out = sum(obj)
-    %     error("Sum not supported")
-    %     % out = sum(obj.ContainedArray,"all");
-    % end
 
     function out = cat(dim,varargin)
         if dim ~= 1
@@ -259,31 +243,23 @@ methods (Access=public)
         out = timecat(varargin{:});
     end
 
-    function out = horzcat(varargin)
+    function out = vertcat(varargin)
         out = timecat(varargin{:});
     end
 
     function obj = timecat(varargin)
-        for i = 2:length(varargin)
-            ref = varargin{1};
-            objut = varargin{i};
-            if ~nwpdata.rasterequals(ref.raster, objut.raster)
-                error("Raster mismatch at position %d", i);
-            end
-            if any(ref.levels ~= objut.levels)
-                error("Level mismatch at position %d");
-            end
-            if any(ref.metadata.Element ~= objut.metadata.Element)
-                error("Quantity mismatch at position %d");
-            end
-        end
+        nwpdata.compatible(varargin{:});
 
         datas = cellfun(@(obj) obj.data, varargin, UniformOutput = false);
         times = cellfun(@(obj) obj.time, varargin, UniformOutput = false);
+        createds = cellfun(@(obj) obj.created, varargin, UniformOutput = false);
         obj = varargin{1};
         obj.data = cat(1, datas{:});
         obj.time = cat(2, times{:});
+        obj.created = cat(2, createds{:});
+        
     end
+
 
     function varargout = size(obj,varargin)
         [varargout{1:nargout}] = size(obj.data,varargin{:});
@@ -338,14 +314,6 @@ methods (Static)
             assert(sum(y_idx) == raster.RasterSize(1), "Y indexor must match raster size");
         end
 
-        % function [raster, x_offset, y_offset] = centerraster(raster, lat, lon)
-        %     arguments
-        %         raster
-        %         lat (1,1) double = NaN;
-        %         lon (1,1) double = NaN;
-        %     end 
-        % end
-
         function isequal = rasterequals(raster1, raster2)
             match_xlimits = all(raster1.XWorldLimits == raster2.XWorldLimits);
             match_ylimits = all(raster1.YWorldLimits == raster2.YWorldLimits);
@@ -395,7 +363,10 @@ methods (Static)
 
         % Get the URL for a NAM analysis
         function [filename, subfolder, url] = make_url(date)
-            
+            if any(mod(date.Hour, 6))
+                error("Invalid model hour");
+            end
+
             base = "https://www.ncei.noaa.gov/data/north-american-mesoscale-model/access/analysis/";
             folder_fmt = "yyyyMM/yyyyMMdd/";
             file_fmt = "'nam_218'_yyyyMMdd_HHmm_000.'grb2'";
@@ -403,17 +374,34 @@ methods (Static)
             filename = string(date, file_fmt);
             url = base + subfolder + filename;
         end
-        %
-        % function [files, downloaded] = download(dates, dest)
-        %     [names, folders, urls] = make_url(dates);
-        %     for i = 1:length(urls)
-        %         
-        %     end
-        % end
+        
+        function [files, downloaded] = download(dates, dest)
+            [names, ~, urls] = nwpdata.make_url(dates);
+            files = fullfile(dest, names);
+            downloaded = false(size(files));
+
+            for i = 1:length(urls)
+                fprintf("Downloading (%d) %s from %s\n", i, names(i), urls(i));
+                if isfile(files(i))
+                    downloaded(i) = true;
+                    fprintf("Located on disk at %s\n", files(i));
+                else
+                    tic;
+                    downloaded(i) = copyfile(urls(i), files(i));
+                    timed = toc;
+                    fprintf("Finished in %.2f sec\n", timed);
+                end
+
+                if ~downloaded(i)
+                    warning("Unable to download '%s' at '%s'", names(i), urls(i));
+                end
+            end
+            files = files(downloaded);
+        end
     end
 
 %% INTERNAL UTILITIES
-    methods (Static, Access = private)
+    methods (Static, Access = public)
         function check_strings(input, strings, prefix)
             % Validate that all members of the input are in the defined strings
             arguments
@@ -438,5 +426,25 @@ methods (Static)
             ME = MException("openrocket:invalid_value", sprintf("%s%s\n%s", prefix, text, string_print));
             throwAsCaller(ME);
         end
+
+        function compatible(varargin)
+            err_id = "nwpdata:cat";
+            mex = [];
+            for i = 2:length(varargin)
+                ref = varargin{1};
+                objut = varargin{i};
+                if ~nwpdata.rasterequals(ref.raster, objut.raster)
+                    mex = MException(err_id, "Raster mismatch at position %d: the planar coordinates are not compatible.", i);
+                elseif any(ref.levels ~= objut.levels)
+                    mex = MException(err_id, "Level mismatch at position %d.", i);
+                elseif any(ref.metadata.Element ~= objut.metadata.Element)
+                    mex = MException(err_id, "Quantity mismatch at position %d: the data are not the same.", i);
+                end
+                if ~isempty(mex)
+                    throwAsCaller(mex)
+                end
+            end
+        end
     end
+
 end
