@@ -1,6 +1,6 @@
 % Examples for importing OpenRocket simulation data and plotting using built-in
 % functions and the library's utilities
-
+set(groot, "DefaultAxesNextPlot", "add");
 clear; close all;
 
 OR_source = "data/OMEN_OR_Output.csv";

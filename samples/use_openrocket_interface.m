@@ -1,3 +1,4 @@
+set(groot, "DefaultAxesNextPlot", "add");
 clear; close all;
 
 %% Basic plots
