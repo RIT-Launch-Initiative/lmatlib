@@ -5,29 +5,38 @@
 % - Read data geographically limited by (lat, lon)
 % - 
 
+% Methods of indexing:
+% 
+
 classdef (Sealed) nwpdata < matlab.mixin.indexing.RedefinesParen
 
-    properties (GetAccess = public, SetAccess = private)
-        data (:, :, :, :, :) double; 
-        time (1,:) datetime;
-        levels (1, :);
-        raster map.rasterref.MapPostingsReference;
-        metadata table;
-        created (1,:) datetime;
+    properties (Dependent, Access = public)
+        data double;
+        time (1, :) duration;
+        proj_x (1, :) double;
+        proj_y (1, :) double;
+        layers (1, :) string;
+        quantities (1, :) string;
+        epoch (1, 1) datetime;
+        projection (1, 1) projcrs;
+    end
+
+    properties (Access = private)
+        DATA (:, :, :, :, :) double; 
+        PROJ_X (1, :) double;
+        PROJ_Y (1, :) double;
+        DATETIME (1, :) datetime;
+        LEVELS (1, :) string;
+        METADATA table;
+        PROJECTION (1, 1) projcrs;
     end
 
     properties (Constant, Access = private)
-        press_regex = "^(\d+)-ISBL";
-        press_sort_direction = "descend";
-        metadata_columns = ["Element", "Unit", "Comment"];
-        coordinate_order = ["t", "y", "x", "p", "q"];
+        metadata_columns = ["Description", "Element", "Unit", "Comment"];
+        coordinate_order = ["time", "proj_x", "proj_y", "layer", "qty"];
+        grib_coordinate_order = ["proj_y", "proj_x", "layer"];
     end
-    % indexing - go into data() and cut time, raster, metadata, pressures accordingly
 
-    properties (Dependent)
-        grid_vectors (1, 5) cell;
-        forecast (1, :) duration;
-    end
     
 %% PUBLIC OBJECT METHODS
     methods
@@ -38,124 +47,134 @@ classdef (Sealed) nwpdata < matlab.mixin.indexing.RedefinesParen
                 params.lat (1,1) double = 0;
                 params.lon (1,1) double = 0;
                 params.side (1,1) double = Inf;
-                params.levels (1,:) = [-Inf Inf];
+                params.layers (1,:) string;
             end
 
             if path == ""
-                obj.data = NaN(0, 0, 0, 0, 0);
-                obj.time = datetime.empty;
-                obj.raster = map.rasterref.MapPostingsReference.empty;
-                obj.levels = [];
-                obj.metadata = table;
-                obj.created = datetime.empty;
                 return; % get empty values
             end
 
             % Initialization
             elements = params.elements;
-            levels = params.levels;
+            layers = params.layers;
             
             info = georasterinfo(path);
             metadata = info.Metadata;
             raster = info.RasterReference;
-            [obj.raster, x_idx, y_idx] = nwpdata.cropraster(raster, ...
+            obj.PROJECTION = raster.ProjectedCRS;
+            [raster, x_idx, y_idx] = nwpdata.cropraster(raster, ...
                 params.lat, params.lon, params.side);
+            [obj.PROJ_X, obj.PROJ_Y] = worldGrid(raster, "gridvectors");
 
-            % YYYYY-ISBL data sampling
-            if isnumeric(levels) 
-                [all_pressures, ~] = nwpdata.find_press(metadata, elements, levels);
-                obj.levels = unique(all_pressures, "stable");
-                obj.data = NaN([1, obj.raster.RasterSize, ...
-                    length(obj.levels), length(elements)]);
-                % Now enough is known to allocate the object data member
+            all_bands = nwpdata.find_bands(metadata, elements, layers);
+            obj.LEVELS = unique(metadata.ShortName(all_bands));
 
-                % read elements in one at a time - all-at-once takes too much memory
-                for i_element = 1:length(elements)
-                    [pressures, bands] = nwpdata.find_press(metadata, elements(i_element), levels);
-                    [data, ~] = readgeoraster(path, Bands = bands);
+            % NOTE assumes indices (t, x, y, l, q)
+            obj.DATA = NaN([1, length(obj.PROJ_X), length(obj.PROJ_Y), ...
+                length(obj.LEVELS), length(elements)]);
 
-                    % "Shouldn't" be necessary to intersect and match indices
-                    % since the data appears to be consistently sorted and
-                    % sampled at all levels, but just to be safe
-                    [~, obj_idx, data_idx] = intersect(obj.levels, pressures, "stable");
-                    if length(obj_idx) < size(obj.data, 4)
-                        warning("Missing data for element %s at %d pressures", ...
-                            elements(i_element), size(obj.data, 4) - length(obj_idx));
-                    end
+            for i_element = 1:length(elements)
+                bands = nwpdata.find_bands(metadata, elements(i_element), layers);
+                this_layers = metadata.ShortName(bands);
+                [data, ~] = readgeoraster(path, Bands = bands);
 
-                    % Put data into object
-                    obj.data(1, :, :, obj_idx, i_element) = data(y_idx, x_idx, data_idx);
-                    obj.metadata = [obj.metadata; metadata(bands(1), :)];
+                [~, obj_idx, data_idx] = intersect(obj.LEVELS, this_layers, "stable");
+                if length(obj_idx) < length(obj.LEVELS)
+                    warning("Missing %s data at %s", ...
+                        elements(i_element), setdiff(obj.LEVELS, this_layers, "stable"));
                 end
-            else % Custom levels
-                all_bands = nwpdata.find_bands(metadata, elements, levels);
-                obj.levels = unique(metadata.ShortName(all_bands));
-                obj.data = NaN([1, obj.raster.RasterSize, 1, length(all_bands)]);
-
-                for i_element = 1:length(elements)
-                    bands = nwpdata.find_bands(metadata, elements(i_element), levels);
-                    this_levels = metadata.ShortName(bands);
-                    [data, ~] = readgeoraster(path, Bands = bands);
-                    [~, obj_idx, data_idx] = intersect(obj.levels, this_levels, "stable");
-                    if length(obj_idx) < size(obj.data, 4)
-                        warning("Missing data for element %s at %d levels", ...
-                            elements(i_element), size(obj.data, 4) - length(obj_idx));
-                    end
-                    % Put data into object
-                    obj.data(1, :, :, obj_idx, i_element) = data(y_idx, x_idx, data_idx);
-                    obj.metadata = [obj.metadata; metadata(bands(1), :)];
-                end
-                % [data, ~] = readgeoraster(path, Bands = bands);
                 
-                % obj.data(1, :, :, 1, :) = data(y_idx, x_idx, :);
-                % obj.metadata = metadata(bands, :);
-                % obj.levels = [];
+                [~, ~, data_reorder] = intersect(nwpdata.coordinate_order, ...
+                    nwpdata.grib_coordinate_order, "stable");
+
+                data = data(y_idx, x_idx, data_idx);
+                data = permute(data, data_reorder);
+
+                % Put data into object
+                
+                indices = nwpdata.ordered_index(time = 1, layer = obj_idx, qty = i_element);
+                obj.DATA(indices{:}) = data;
+                obj.METADATA = [obj.METADATA; metadata(bands(1), nwpdata.metadata_columns)];
             end
-            obj.time = metadata.ValidTime(1);
-            obj.created = metadata.ReferenceTime(1);
-            obj.metadata = obj.metadata(:, ["Element", "Unit", "Comment"]);
-        end
 
-        function grid_vectors = get.grid_vectors(obj)
-            [x, y] = worldGrid(obj.raster, "gridvectors");
-            grid_vectors = {obj.time, y, x, obj.levels, obj.metadata.Element};
-        end
-
-        function forecast = get.forecast(obj)
-            forecast = obj.time - obj.created;
+            obj.DATETIME = metadata.ValidTime(1);
         end
 
         function mapshow(obj)
-            if any(size(obj.data, [1 4 5]) ~= 1)
-                error("Data must be singleton across all non-xy dimensions");
+            [~, ~, obj_reorder] = intersect(nwpdata.grib_coordinate_order, ...
+                nwpdata.coordinate_order, "stable");
+
+            map_data = permute(squeeze(obj.DATA), obj_reorder);
+            if ~ismatrix(map_data)
+                error("Too many non_singleton dimensions (%d) to plot (%d)", ndims(map_data), 2);
             end
-            map_data = squeeze(obj.data(1, :, :, 1, 1));
-            
-            mapshow(map_data, obj.raster, DisplayType = "surface");
+
+            mapshow(obj.proj_x, obj.proj_y, map_data, DisplayType = "surface");
             cb = colorbar;
-            cb.Label.String = obj.metadata.Comment;
+            cb.Label.String = obj.METADATA.Comment;
             axis equal;
             axis tight;
         end
     end
 
+%% GETTERS
+    methods
+        function data = get.data(obj)
+            data = squeeze(obj.DATA);
+        end
+
+        function x = get.proj_x(obj)
+            x = obj.PROJ_X;
+        end
+
+        function y = get.proj_y(obj)
+            y = obj.PROJ_Y;
+        end
+
+        function t = get.epoch(obj)
+            t = obj.DATETIME(1);
+        end
+
+        function t = get.time(obj)
+            t = obj.DATETIME - obj.epoch;
+        end
+
+        function lev = get.layers(obj)
+            lev = obj.LEVELS;
+        end
+
+        function crs = get.projection(obj)
+            crs = obj.PROJECTION;
+        end
+
+        function quants = get.quantities(obj)
+            quants = obj.METADATA.Element';
+        end
+    end
+
 %% INDEXING METHODS
 methods (Access=protected)
-    % The acutal indexing logic lives in (index_vectors) and are further broken
-    % out into index_(...) for maintainability
 
     function obj = parenReference(obj, indexOp)
         indices = indexOp.Indices;
-        times = obj.time_index(indices{1});
-        lvls = obj.lvl_index(indices{4});
-        qties = obj.qty_index(indices{5});
 
-        obj.data = obj.data(times, indices{2:3}, lvls, qties);
-        obj.raster = obj.yx_index(indices{2:3});
-        obj.time = obj.time(times);
-        obj.created = obj.created(times);
-        obj.levels = obj.levels(lvls);
-        obj.metadata = obj.metadata(qties, :);
+        % indices = struct("indices");
+
+        time_indices = obj.time_index(indices{1});
+        x_indices = indices{2};
+        y_indices = indices{3};
+        layer_indices = obj.layer_index(indices{4});
+        qty_indices = obj.qty_index(indices{5});
+        data_indices = nwpdata.ordered_index(time = time_indices, ...
+            proj_x = x_indices, proj_y = y_indices, ...
+            layer = layer_indices, qty = qty_indices);
+
+        obj.DATETIME = obj.DATETIME(time_indices);
+        obj.PROJ_X = obj.PROJ_X(x_indices);
+        obj.PROJ_Y = obj.PROJ_Y(y_indices);
+        obj.LEVELS = obj.LEVELS(layer_indices);
+        obj.METADATA = obj.METADATA(qty_indices, :);
+        obj.DATA = obj.DATA(data_indices{:});
     end
 
     function parenAssign(~, ~, ~)
@@ -171,68 +190,31 @@ methods (Access=protected)
     end
 
     function time_indices = time_index(obj, time_op)
-        switch (class(time_op))
-            case "duration"
-                [~, time_indices, ~] = intersect(time_op, obj.forecast, "stable");
-            case "datetime"
-                [~, time_indices, ~] = intersect(time_op, obj.time, "stable");
-            case "timerange"
-                tr_struct = struct(time_op);
-
-                if isduration(tr_struct.first)
-                    dummy = timetable((1:length(obj.time))', RowTimes = obj.forecast);
-                elseif isdatetime(tr_struct.first)
-                    dummy = timetable((1:length(obj.time))', RowTimes = obj.time);
-                else
-                    error("Unrecognized type for timerange subscript: %s", ...
-                        class(tr_struct.first));
-                end
-
-                time_indices = dummy{time_op, 1};
-            otherwise
-                time_indices = time_op;
-        end
+        dummy = timetable((1:length(obj.time))', RowTimes = obj.time);
+        time_indices = dummy{time_op, 1};
     end
 
-    function raster = yx_index(obj, y_op, x_op)
-        grids = obj.grid_vectors;
-        x = grids{3}(x_op);
-        y = grids{2}(y_op);
-        
-        if isempty(x) || isempty(y)
-            raster = map.rasterref.MapPostingsReference.empty;
-            return;
-        end
-        
-        x_limits = [min(x) max(x)];
-        y_limits = [min(y) max(y)];
-        
-        raster = nwpdata.cropraster(obj.raster, x_limits, y_limits);
-    end
-
-    function lvl_indices = lvl_index(obj, lvl_op)
-        if isstring(lvl_op)
-            if isnumeric(obj.levels)
-                error("String-based indexing not supported for numeric pressure levels");
-            end
-            [~, ~, lvl_indices] = intersect(lvl_op, obj.levels);
+    function layer_indices = layer_index(obj, layer_op)
+        if isstring(layer_op)
+            [~, ~, layer_indices] = intersect(layer_op, obj.LEVELS, "stable");
         else
-            lvl_indices = lvl_op;
+            layer_indices = layer_op;
         end
     end
 
     function qty_indices = qty_index(obj, qty_op)
         if isstring(qty_op)
-            [~, ~, qty_indices] = intersect(qty_op, obj.metadata.Element);
+            [~, ~, qty_indices] = intersect(qty_op, obj.METADATA.Element, "stable");
         else
             qty_indices = qty_op;
         end
     end
+
 end 
 
 methods (Access=public)
     function out = value(obj)
-        out = obj.data;
+        out = obj.DATA;
     end
 
     function out = cat(dim,varargin)
@@ -243,23 +225,23 @@ methods (Access=public)
         out = timecat(varargin{:});
     end
 
-    function out = vertcat(varargin)
+    function out = horzcat(varargin)
         out = timecat(varargin{:});
     end
 
     function obj = timecat(varargin)
         nwpdata.compatible(varargin{:});
 
-        datas = cellfun(@(obj) obj.data, varargin, UniformOutput = false);
-        times = cellfun(@(obj) obj.time, varargin, UniformOutput = false);
-        createds = cellfun(@(obj) obj.created, varargin, UniformOutput = false);
+        datas = cellfun(@(obj) obj.DATA, varargin, UniformOutput = false);
+        times = cellfun(@(obj) obj.DATETIME, varargin, UniformOutput = false);
         obj = varargin{1};
-        obj.data = cat(1, datas{:});
-        obj.time = cat(2, times{:});
-        obj.created = cat(2, createds{:});
-        
-    end
+        obj.DATA = cat(find(nwpdata.coordinate_order == "time"), datas{:});
+        obj.DATETIME = [times{:}];
 
+        if ~issorted(obj.DATETIME, "strictascend")
+            error("Time must strictly increase");
+        end
+    end
 
     function varargout = size(obj,varargin)
         [varargout{1:nargout}] = size(obj.data,varargin{:});
@@ -314,51 +296,35 @@ methods (Static)
             assert(sum(y_idx) == raster.RasterSize(1), "Y indexor must match raster size");
         end
 
-        function isequal = rasterequals(raster1, raster2)
-            match_xlimits = all(raster1.XWorldLimits == raster2.XWorldLimits);
-            match_ylimits = all(raster1.YWorldLimits == raster2.YWorldLimits);
-            match_size = all(raster1.RasterSize == raster2.RasterSize);
-            match_crs = raster1.ProjectedCRS.isequal(raster2.ProjectedCRS);
-            isequal = match_xlimits && match_ylimits && match_size && match_crs;
-        end
-
-        function bands = find_bands(metadata, elements, levels)
-            % [bands] = FIND_BANDS(metadata, elements, levels)
-            % Find the bands (linear indices) matching any elements AND any levels
-            %   The components of (elements) and (levels) are joined by
+        function bands = find_bands(metadata, elements, layers)
+            % [bands] = FIND_BANDS(metadata, elements, layers)
+            % Find the bands (linear indices) matching any elements AND any layers
+            %   The components of (elements) and (layers) are joined by
             %   "(e1|e2|...)" and treated as regular expressions
             arguments
                 metadata table;
                 elements (1, :) string;
-                levels (1, :) string;
+                layers (1, :) string;
             end
 
             elements = "(" + join(elements, "|") + ")";
-            levels = "(" + join(levels, "|") + ")";
+            layers = "(" + join(layers, "|") + ")";
             element_idx = ~cellfun(@isempty, regexp(metadata.Element, elements));
-            level_idx = ~cellfun(@isempty, regexp(metadata.ShortName, levels));
-            bands = find(element_idx & level_idx);
+            layer_idx = ~cellfun(@isempty, regexp(metadata.ShortName, layers));
+            bands = find(element_idx & layer_idx);
         end
 
-        function [pressures, bands] = find_press(metadata, elements, levels)
-            % [pressures, bands] = FIND_PRESS(metadata, elements, levels)
-            % Find the unique pressure levels associated with (elements) isolated to range (levels)
-            % Sort in the order configured under Constants
+        function ops = ordered_index(ops)
             arguments
-                metadata table;
-                elements (1,:) string;
-                levels (1,2) double;
+                ops.time = ':';
+                ops.proj_x = ':';
+                ops.proj_y = ':';
+                ops.layer = ':';
+                ops.qty = ':';
             end
-            bands = nwpdata.find_bands(metadata, elements, nwpdata.press_regex);
-            pressures = string(regexp(metadata.ShortName(bands), nwpdata.press_regex, "tokens"));
-            pressures = str2double(pressures);
-            % cut levels to specified range
-            in_range = min(levels) <= pressures & pressures <= max(levels);
-            pressures = pressures(in_range);
-            bands = bands(in_range);
-
-            [pressures, order] = sort(pressures, nwpdata.press_sort_direction);
-            bands = bands(order);
+            
+            ops = arrayfun(@(field) ops.(field), nwpdata.coordinate_order, ...
+                UniformOutput = false);
         end
 
         % Get the URL for a NAM analysis
@@ -429,18 +395,15 @@ methods (Static)
 
         function compatible(varargin)
             err_id = "nwpdata:cat";
-            mex = [];
             for i = 2:length(varargin)
                 ref = varargin{1};
                 objut = varargin{i};
-                if ~nwpdata.rasterequals(ref.raster, objut.raster)
-                    mex = MException(err_id, "Raster mismatch at position %d: the planar coordinates are not compatible.", i);
-                elseif any(ref.levels ~= objut.levels)
-                    mex = MException(err_id, "Level mismatch at position %d.", i);
-                elseif any(ref.metadata.Element ~= objut.metadata.Element)
-                    mex = MException(err_id, "Quantity mismatch at position %d: the data are not the same.", i);
-                end
-                if ~isempty(mex)
+                tests = [isequal(ref.proj_x, objut.proj_x), ...
+                    isequal(ref.proj_y, objut.proj_y), ...
+                    isequal(ref.layers, objut.layers), ...
+                    isequal(ref.quantities, objut.quantities)];
+                if any(~tests)
+                    mex = MException(err_id, "Dimension mismatch at %d", i);
                     throwAsCaller(mex)
                 end
             end
