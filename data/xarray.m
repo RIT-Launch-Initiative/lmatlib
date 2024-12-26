@@ -2,10 +2,7 @@
 % MATLAB implementation of xarray
 % Paren indexing: index into data and underlying axisinfo "normally"
 % Brace indexing: index into data only
-% Dot indexing: index into axisinfo
-
-% Written by Yevgeniy Gorbachev
-% December 2024
+% Dot indexing: index into axes
 
 classdef xarray < matlab.mixin.indexing.RedefinesDot ...
         & matlab.mixin.indexing.RedefinesParen ...
@@ -25,17 +22,19 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
     methods
         function obj = xarray(data, axes, coordinates)
             arguments
-                data double
+                data {mustBeA(data, ["double", "xarray"])};
             end
 
             arguments (Repeating)
                 axes (1, 1) string;
                 coordinates (1, :);
             end
-
-            if length(axes) ~= length(coordinates)
-                error("Specify axes using name = value or 'name', 'value' syntax");
+            
+            if isa(data, "xarray")
+                obj = data;
+                return;
             end
+
             if length(axes) < ndims(data)
                 error("Not enough coordinate axes specified");
             end
@@ -47,13 +46,11 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
         end
 
         function varargout = size(obj, varargin)
-            switch (length(varargin))
-                case 0
-                    sizes = cellfun(@length, obj.coordinates);
-                case 1
-                    sizes = cellfun(@length, obj.coordinates{varargin{1}});
-                otherwise
-                    sizes = cellfun(@length, obj.coordinates{[varargin{:}]});
+            if isempty(varargin)
+                sizes = cellfun(@length, obj.coordinates);
+            else
+                queries = obj.convertdims(varargin{:});
+                sizes = cellfun(@length, obj.coordinates(queries));
             end
             
             varargout = cell(1, nargout);
@@ -69,9 +66,7 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
 
         function obj = cat(dim, varargin)
             obj = varargin{1};
-            if isstring(dim)
-                dim = obj.names2dims(dim);
-            end
+            dim = convertdims(obj, dim);
 
             to_compare = 1:ndims(varargin{1});
             to_compare = to_compare(to_compare ~= dim);
@@ -92,21 +87,17 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
         end
 
         function obj = sort(obj, dims, varargin)
-            if isstring(dims)
-                dims = obj.names2dims(dims);
-            end
+            dims = obj.convertdims(dims);
 
-            indices = repmat({':'}, 1, length(dims));
+            ops = repmat({':'}, 1, ndims(obj));
             for dim = dims
-                [~, indices(dim)] = sort(obj.coordinates{dim}, varargin{:});
+                [~, ops{dim}] = sort(obj.coordinates{dim}, varargin{:});
             end
-            obj = obj(indices{:});
+            obj = obj(ops{:});
         end
 
         function obj = permute(obj, dimorder)
-            if isstring(dimorder)
-                dimorder = names2dims(dimorder);
-            end
+            dimorder = obj.convertdims(dimorder);
 
             if length(dimorder) ~= length(obj)
                 error("Dimension order must have exactly one entry per coordinate");
@@ -123,6 +114,36 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
             obj.axes(scalardims) = [];
             obj.coordinates(scalardims) = [];
         end
+
+        function data = double(obj)
+            data = squeeze(obj.data);
+        end
+
+        function obj = subset(obj, axes, indices)
+            arguments
+                obj xarray
+            end
+            arguments (Repeating)
+                axes (1, 1) string;
+                indices (1, :);
+            end
+
+            ops = repmat({':'}, 1, ndims(obj));
+            dims = obj.convertdims(axes{:});
+
+            for i_ax = 1:length(axes)
+                if isstring(indices{i_ax})
+                    indices{i_ax} = categorical(indices{i_ax});
+                end
+                if isnumeric(indices{i_ax}) || islogical(indices{i_ax})
+                    ops{dims(i_ax)} = indices{i_ax};
+                else
+                    [~, ops{dims(i_ax)}] = ismember(indices{i_ax}, obj.(axes{i_ax}));
+                end
+            end
+
+            obj = obj(ops{:});
+        end
     end
 
     methods (Static)
@@ -135,15 +156,14 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
 
     methods (Access = protected)
         % OVERRIDE PAREN REFERENCING TO SUBSCRIPT AXES
-        function [dims] = names2dims(obj, names)
-            arguments
-                obj xarray;
-                names (1, :) string;
-            end
-
-            [present, dims] = ismember(names, obj.axes);
-            if any(~present)
-                error("Unrecognized axes: %s", mat2str(names(~present)));
+        function dims = convertdims(obj, varargin)
+            dims = [varargin{:}];
+            if isstring(dims)
+                names = dims;
+                [present, dims] = ismember(names, obj.axes);
+                if any(~present)
+                    error("Unrecognized axes: %s", mat2str(names(~present)));
+                end
             end
         end
 
@@ -172,7 +192,7 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
             end
 
             dest = obj.(op);
-            if ~all(dest.dimequal(subobj, 1:ndims(dest)));
+            if ~all(dest.dimequal(subobj, 1:ndims(dest)))
                 error("Dimensions not equal");
             end
             obj.data(op.Indices{:}) = subobj.data;
@@ -200,12 +220,17 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
 
         % OVERRIDE DOT-INDEXING TO ACCESS ARRAY AXES
         function coord = dotReference(obj, op)
-            axis = op.Name;
+            axis = op(1).Name;
             axis_idx = find(axis == obj.axes);
             if isempty(axis_idx)
                 error("No axis '%s'", axis);
             end
-            coord = obj.coordinates{axis_idx};
+            % if the data is subsequently time-indexed
+            if length(op) == 2
+                coord = obj.coordinates{axis_idx}.(op(2));
+            else
+                coord = obj.coordinates{axis_idx};
+            end
         end
 
         function obj = dotAssign(obj, op, input)
