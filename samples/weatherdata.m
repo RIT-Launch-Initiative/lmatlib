@@ -1,4 +1,5 @@
 clear;
+
 %% Grid-projected weather data
 set(groot, "defaultAxesNextPlot", "add");
 baro_inventory = atmosphere.baroproducts;
@@ -72,7 +73,6 @@ z_0 = double(permute(squeeze(sfc.subset(element = "HGT")), ["x", "y"]));
 surf(x, y, z_0, ...
     EdgeColor = "none");
 
-% get wind data, but decimate x/y, crop and decimate layer
 windinfo = squeeze(atmos.data.subset(element = ["UGRD", "VGRD", "HGT"])); % get wind data, ignore time
 windinfo = windinfo.subset(layer = (windinfo.layer > 70e3) & (mod(windinfo.layer, 5e3) == 0)); % crop and decimate layer
 windinfo = windinfo.subset(x = 1:2:length(windinfo.x), y = 1:2:length(windinfo.y)); % decimate position
@@ -85,7 +85,44 @@ quiver3(x, y, double(windinfo.subset(element = "HGT")), ...
     zeros(size(x)));
 
 colorbartext("Ground level [m]");
-demcmap(z_0)
 view(3);
 % axis("tight", "equal");
+
+%% Geographically sampled weather data
+conus = {"lat", 40, "lon", -99, "side", 5000e3};
+gfs_file = nwpdata.download("data", "gfs", baro_inventory.gfs_p50, date, forecast);
+[sfc, raster, metadata] = nwpdata.read(gfs_file, conus{:}, ...
+    elements = ["HGT", "TMP"], layers = "0-SFC");
+
+atmos = atmosphere(gfs_file, conus{:});
+
+figure(name = "CONUS elevation model");
+
+
+sfc = sort(sfc, ["lat", "lon"], "ascend");
+z = double(sfc.subset(element = "HGT"));
+exaggeration = 100;
+[lat, lon] = ndgrid(sfc.lat, sfc.lon);
+[latlim, lonlim] = geoquadline(lat, lon);
+worldmap(double(sfc), raster);
+surfm(latlim, lonlim, z, exaggeration*z);
+colorbartext("Ground level [m]");
+
+windinfo = squeeze(atmos.data.subset(element = ["UGRD", "VGRD", "HGT"])); % get wind data, ignore time
+windinfo = windinfo.subset(layer = (windinfo.layer >= 40e3) & (mod(windinfo.layer, 20e3) < 1)); % crop and decimate layer
+windinfo = windinfo.subset(lat = 1:3:length(windinfo.lat), lon = 1:3:length(windinfo.lon)); % decimate position
+windinfo = permute(windinfo, ["lat", "lon", "layer", "element"]);
+
+[lat, lon] = ndgrid(windinfo.lat, windinfo.lon);
+
+deg_per_ms = 0.05; % quiverm automatic scaling is worthless, use this to scale 1 m/s wind speed to some degrees lat/lon
+for lay = 1:length(windinfo.layer)
+    quiver3m(lat, lon, exaggeration * double(windinfo.subset(element = "HGT", layer = lay)), ...
+        deg_per_ms * double(windinfo.subset(element = "VGRD", layer = lay)), ...
+        deg_per_ms * double(windinfo.subset(element = "UGRD", layer = lay)), ...
+        zeros(size(lat)), "y", 0);
+end
+
+
+view(3);
 
