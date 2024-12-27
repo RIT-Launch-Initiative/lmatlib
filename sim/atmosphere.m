@@ -15,6 +15,7 @@ classdef atmosphere
         function obj = atmosphere(paths, params)
             arguments
                 paths (:, 1) {mustBeFile};
+                params.elements (1, :) string = ["HGT", "UGRD", "VGRD", "TMP"];
                 params.lat (1,1) double = 0;
                 params.lon (1,1) double = 0;
                 params.side (1,1) double = Inf;
@@ -23,7 +24,7 @@ classdef atmosphere
             data_array = cell(1, length(paths));
             for i = 1:length(paths)
                 [data_array{i}, raster] = atmosphere.read_baro(paths, ...
-                    elements = ["HGT", "UGRD", "VGRD", "TMP", "TKE"], ...
+                    elements = ["HGT", "UGRD", "VGRD", "TMP"], ...
                     lat = params.lat, lon = params.lon, side = params.side);
             end
 
