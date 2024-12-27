@@ -9,14 +9,13 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
         & matlab.mixin.indexing.RedefinesBrace ...
         & matlab.mixin.CustomDisplay
 
-
     properties (GetAccess = public, SetAccess = protected)
-        axes (1, :) string;
-        coordinates (1, :) cell;
+        axes (1, :) string = [];
+        coordinates (1, :) cell = {};
     end
 
     properties (Access = protected)
-        data double;
+        data double = [];
     end
 
     methods
@@ -35,6 +34,9 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
                 return;
             end
 
+            if isempty(data)
+                return;
+            end
             if length(axes) < ndims(data)
                 error("Not enough coordinate axes specified");
             end
@@ -99,7 +101,7 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
         function obj = permute(obj, dimorder)
             dimorder = obj.convertdims(dimorder);
 
-            if length(dimorder) ~= length(obj)
+            if length(dimorder) ~= ndims(obj)
                 error("Dimension order must have exactly one entry per coordinate");
             end
 
@@ -132,9 +134,6 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
             dims = obj.convertdims(axes{:});
 
             for i_ax = 1:length(axes)
-                if isstring(indices{i_ax})
-                    indices{i_ax} = categorical(indices{i_ax});
-                end
                 if isnumeric(indices{i_ax}) || islogical(indices{i_ax})
                     ops{dims(i_ax)} = indices{i_ax};
                 else
@@ -181,8 +180,8 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
             end
 
             obj.data = obj.data.(op);
-            for i = 1:length(obj.axes)
-                obj.(obj.axes(i)) = obj.coordinates{i}(op.Indices{i});
+            for i = 1:ndims(obj)
+                obj.(obj.axes(i)) = obj.(obj.axes(i))(op.Indices{i});
             end
         end
 
@@ -245,9 +244,6 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
             end
             if ~isvector(input)
                 error("Coordinates must be a vector");
-            end
-            if isstring(input)
-                input = categorical(input);
             end
 
             axis_idx = find(axis == obj.axes);
