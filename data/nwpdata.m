@@ -66,7 +66,7 @@ classdef (Abstract) nwpdata
                 layers = metadata.ShortName(bands);
                 if length(layers) ~= length(layer_template)
                     error("Missing data for element %s at %s", element, ...
-                        setdiff(layers_template, layers));
+                        mat2str(setdiff(layer_template, layers)));
                 end
 
                 [element_data, ~] = readgeoraster(path, Bands = bands);
