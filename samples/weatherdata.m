@@ -15,7 +15,7 @@ nam_file = nwpdata.download("data", "nam", baro_inventory.nam_12km, date, foreca
     lat = urrg.lat, lon = urrg.lon, side = 200e3); 
 nam_atmos = atmosphere(nam_file, lat = urrg.lat, lon = urrg.lon, side = 200e3);
 
-urrg_nam_data = nam_atmos.sample(hours(0), urrg.lat, urrg.lon);
+urrg_nam_data = nam_atmos.sample3(hours(0), urrg.lat, urrg.lon);
 
 figure(name = "Air column at selected point");
 tiledlayout(1,4)
@@ -136,7 +136,7 @@ for lay = 1:length(windinfo.layer)
         zeros(size(lat)), "y", 0);
 end
 
-urrg_gfs_data = gfs_atmos.sample(hours(0), urrg.lat, urrg.lon);
+urrg_gfs_data = gfs_atmos.sample3(hours(0), urrg.lat, urrg.lon);
 
 figure(name = "GFS vs NAM winds at selected location");
 tiledlayout(1,2);

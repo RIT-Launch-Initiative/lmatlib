@@ -20,7 +20,7 @@ classdef atmosphere
                 params.lon (1,1) double = 0;
                 params.side (1,1) double = Inf;
             end
-            
+
             data_array = cell(1, length(paths));
             for i = 1:length(paths)
                 [data_array{i}, raster] = atmosphere.read_baro(paths, ...
@@ -63,7 +63,7 @@ classdef atmosphere
             end
         end
 
-        function out = sample(obj, time, lat, lon)
+        function out = sample3(obj, time, lat, lon)
             [int_lat, int_lon] = obj.get_intrinsic(lat, lon);
             if length(obj.interpolant.GridVectors) == 2
                 out = obj.interpolant(int_lat, int_lon);
@@ -71,6 +71,27 @@ classdef atmosphere
                 out = obj.interpolant(int_lat, int_lon, seconds(time));
             end
             out = xarray(squeeze(out), layer = obj.data.layer, element = obj.data.element);
+        end
+
+        function varargout = sample4(obj, time, lat, lon, height, elements)
+            samp = sample3(obj, time, lat, lon);
+
+            interp_data = [samp.layer(:), samp.double];
+            result = interp1(samp.pick(element = "HGT").double, interp_data, height);
+            result = xarray(result, height = height, element = ["PRES", samp.element]);
+
+            present = ismember(elements, result.element);
+            if any(~present)
+                error("Data elements %s not found", elements(present));
+            end
+            result = result.pick(element = elements);
+
+            if nargout == 1
+                varargout{1} = result;
+            else
+                unpack = mat2cell(result.double, length(result.height), ones(1, length(result.element)));
+                [varargout{1:nargout}] = unpack{:};
+            end
         end
     end
 
