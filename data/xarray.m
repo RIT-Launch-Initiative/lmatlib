@@ -97,8 +97,9 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
             obj.coordinates(scalardims) = [];
         end
 
-        % Index by equality, according to ismember(<values>, <coord>)
+        % Index by exact equality, according to ismember(<values>, <coord>)
         % Returns values in the order specified by <values>
+        % xarr.pick(axis = "value")
         function obj = pick(obj, axes, values)
             arguments
                 obj xarray
@@ -121,7 +122,32 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
             obj = obj(ops{:});
         end
 
+        % Index by equality with tolerance
+        % xarr.range(axis = [center tol])
+        function obj = pickt(obj, axes, ranges)
+            arguments
+                obj xarray
+            end
+            arguments (Repeating)
+                axes (1, 1) string;
+                ranges (1, 2);
+            end
+            
+            ops = repmat({':'}, 1, naxes(obj));
+            dims = obj.convertdims(axes{:});
+
+            for i_ax = 1:length(axes)
+                coord = obj.(axes{i_ax});
+                rang = ranges{i_ax}(1) + ranges{i_ax}(2) * [-1 1];
+                ops{dims(i_ax)} = rang(1) <= coord & coord <= rang(2);
+            end
+
+            obj = obj(ops{:});
+        end
+
         % Index by range membership, according to min(rng) <= coord & coord <= max(rng)
+        % xarr.range(axis = [lower, upper])
+        %   [upper, lower] also works, and either can be +/- Inf
         function obj = range(obj, axes, ranges)
             arguments
                 obj xarray
@@ -141,6 +167,7 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
 
             obj = obj(ops{:});
         end
+
 
         function obj = index(obj, axes, indices)
             arguments
