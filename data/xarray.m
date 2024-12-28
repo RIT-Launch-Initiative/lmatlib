@@ -47,30 +47,23 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
             end
         end
 
-        function varargout = size(obj, varargin)
-            if isempty(varargin)
-                sizes = cellfun(@length, obj.coordinates);
-            else
-                queries = obj.convertdims(varargin{:});
-                sizes = cellfun(@length, obj.coordinates(queries));
-            end
-            
-            varargout = cell(1, nargout);
-            if nargout == 1
-                varargout{1} = sizes;
-            else
-                for i = 1:nargout
-                    varargout{i} = sizes(i);
-                end
+        function data = double(obj)
+            data = squeeze(obj.data);
+        end
+    end
 
-            end
+%% MANIUPLATION
+    methods (Access = public)
+        function obj = rename(obj, ax, new)
+            dim = obj.convertdims(ax);
+            obj.axes(dim) = new;
         end
 
         function obj = cat(dim, varargin)
             obj = varargin{1};
             dim = convertdims(obj, dim);
 
-            to_compare = 1:ndims(varargin{1});
+            to_compare = 1:naxes(varargin{1});
             to_compare = to_compare(to_compare ~= dim);
             for i_obj = 2:length(varargin)
                 if ~obj.dimequal(varargin{i_obj}, to_compare)
@@ -84,24 +77,11 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
             obj.coordinates{dim} = [coords{:}];
         end
 
-        function n = ndims(obj)
-            n = length(obj.axes);
-        end
 
-        function obj = sort(obj, dims, varargin)
-            dims = obj.convertdims(dims);
+        function obj = permute(obj, order)
+            dimorder = obj.convertdims(order);
 
-            ops = repmat({':'}, 1, ndims(obj));
-            for dim = dims
-                [~, ops{dim}] = sort(obj.coordinates{dim}, varargin{:});
-            end
-            obj = obj(ops{:});
-        end
-
-        function obj = permute(obj, dimorder)
-            dimorder = obj.convertdims(dimorder);
-
-            if length(dimorder) ~= ndims(obj)
+            if length(dimorder) ~= naxes(obj)
                 error("Dimension order must have exactly one entry per coordinate");
             end
 
@@ -117,11 +97,52 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
             obj.coordinates(scalardims) = [];
         end
 
-        function data = double(obj)
-            data = squeeze(obj.data);
+        % Index by equality, according to ismember(<values>, <coord>)
+        % Returns values in the order specified by <values>
+        function obj = pick(obj, axes, values)
+            arguments
+                obj xarray
+            end
+            arguments (Repeating)
+                axes (1, 1) string;
+                values (1, :);
+            end
+
+            dims = obj.convertdims(axes{:});
+            ops = repmat({':'}, 1, naxes(obj));
+
+            for i_ax = 1:length(axes)
+                [~, ops{dims(i_ax)}] = ismember(values{i_ax}, obj.(axes{i_ax}));
+                if ops{dims(i_ax)} == 0
+                    ops{dims(i_ax)} = [];
+                end
+            end
+
+            obj = obj(ops{:});
         end
 
-        function obj = subset(obj, axes, indices)
+        % Index by range membership, according to min(rng) <= coord & coord <= max(rng)
+        function obj = range(obj, axes, ranges)
+            arguments
+                obj xarray
+            end
+            arguments (Repeating)
+                axes (1, 1) string;
+                ranges (1, 2);
+            end
+
+            ops = repmat({':'}, 1, naxes(obj));
+            dims = obj.convertdims(axes{:});
+
+            for i_ax = 1:length(axes)
+                coord = obj.(axes{i_ax});
+                ops{dims(i_ax)} = min(ranges{i_ax}) <= coord & coord <= max(ranges{i_ax});
+            end
+
+            obj = obj(ops{:});
+        end
+
+        function obj = index(obj, axes, indices)
             arguments
                 obj xarray
             end
@@ -130,17 +151,49 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
                 indices (1, :);
             end
 
-            ops = repmat({':'}, 1, ndims(obj));
+            ops = repmat({':'}, 1, naxes(obj));
             dims = obj.convertdims(axes{:});
 
             for i_ax = 1:length(axes)
-                if isnumeric(indices{i_ax}) || islogical(indices{i_ax})
-                    ops{dims(i_ax)} = indices{i_ax};
-                else
-                    [~, ops{dims(i_ax)}] = ismember(indices{i_ax}, obj.(axes{i_ax}));
-                end
+                ops{dims(i_ax)} = indices{i_ax};
             end
 
+            obj = obj(ops{:});
+        end
+    end
+
+
+%% METADATA ACCESS
+    methods (Access = public)
+        function varargout = size(obj, varargin)
+            if isempty(varargin)
+                sizes = cellfun(@length, obj.coordinates);
+            else
+                queries = obj.convertdims(varargin{:});
+                sizes = cellfun(@length, obj.coordinates(queries));
+            end
+            
+            varargout = cell(1, nargout);
+            if nargout == 1
+                varargout{1} = sizes;
+            else
+                for i = 1:nargout
+                    varargout{i} = sizes(i);
+                end
+            end
+        end
+
+        function n = naxes(obj)
+            n = length(obj.axes);
+        end
+
+        function obj = sort(obj, dims, varargin)
+            dims = obj.convertdims(dims);
+
+            ops = repmat({':'}, 1, naxes(obj));
+            for dim = dims
+                [~, ops{dim}] = sort(obj.coordinates{dim}, varargin{:});
+            end
             obj = obj(ops{:});
         end
     end
@@ -149,10 +202,9 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
         function obj = empty
             obj = xarray([]);
         end
-
     end
 
-
+%% INDEXING OVERRIDE
     methods (Access = protected)
         % OVERRIDE PAREN REFERENCING TO SUBSCRIPT AXES
         function dims = convertdims(obj, varargin)
@@ -161,7 +213,9 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
                 names = dims;
                 [present, dims] = ismember(names, obj.axes);
                 if any(~present)
-                    error("Unrecognized axes: %s", mat2str(names(~present)));
+                    mex = MException("xarray:invalidAxis", ...
+                        "Unrecognized axis or property name '%s'", mat2str(names(~present)));
+                    throwAsCaller(mex);
                 end
             end
         end
@@ -175,23 +229,23 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
         end
 
         function obj = parenReference(obj, op)
-            if length(op.Indices) ~= ndims(obj)
-                error("%d subscripts expected, got %d", ndims(obj), length(op.Indices));
+            if length(op.Indices) ~= naxes(obj)
+                error("%d subscripts expected, got %d", naxes(obj), length(op.Indices));
             end
 
             obj.data = obj.data.(op);
-            for i = 1:ndims(obj)
+            for i = 1:naxes(obj)
                 obj.(obj.axes(i)) = obj.(obj.axes(i))(op.Indices{i});
             end
         end
 
         function obj = parenAssign(obj, op, subobj)
-            if length(op.Indices) ~= ndims(obj)
-                error("%d subscripts expected, got %d", ndims(obj), length(op.Indices));
+            if length(op.Indices) ~= naxes(obj)
+                error("%d subscripts expected, got %d", naxes(obj), length(op.Indices));
             end
 
             dest = obj.(op);
-            if ~all(dest.dimequal(subobj, 1:ndims(dest)))
+            if ~all(dest.dimequal(subobj, 1:naxes(dest)))
                 error("Dimensions not equal");
             end
             obj.data(op.Indices{:}) = subobj.data;
@@ -265,11 +319,12 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
         end
     end
 
+%% OBJECT DISPLAY OVERRIDE
     methods (Access = protected)
         function header = getHeader(obj)
             dimstr = matlab.mixin.CustomDisplay.convertDimensionsToString(obj);
             nonscalar = sum(size(obj) ~= 1);
-            if ndims(obj) > 3 && nonscalar ~= ndims(obj)
+            if naxes(obj) > 3 && nonscalar ~= naxes(obj)
                 dimstr = sprintf('%s (%d nonscalar)', dimstr, nonscalar);
             end
             header = sprintf('%s %s with axes:', dimstr, class(obj));

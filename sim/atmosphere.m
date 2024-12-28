@@ -72,10 +72,6 @@ classdef atmosphere
             end
             out = xarray(squeeze(out), layer = obj.data.layer, element = obj.data.element);
         end
-        
-        function out = tabulate(obj, time, lat, lon)
-            samp = obj.sample(time, lat, lon);
-        end
     end
 
     methods (Static)
