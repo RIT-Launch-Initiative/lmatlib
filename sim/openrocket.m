@@ -96,6 +96,11 @@ classdef (Sealed) openrocket < handle
         document; % OpenRocketDocument Java object
     end
 
+    properties (Access = private)
+        file;   % Java File object
+        loader; % Java Loader object
+    end
+
     properties (Constant, Access = private)
         started = openrocket.start(); % dummy constant to ensure start() is called once
 
@@ -111,11 +116,6 @@ classdef (Sealed) openrocket < handle
         reco_name = "RECOVERY_DEVICE_DEPLOYMENT"; % Magic value: Name printed for recovery events
     end
 
-    properties (Access = private)
-        file;   % Java File object
-        loader; % Java Loader object
-    end
-
 %% STATIC UTILITIES
     methods (Static, Access = public)
 
@@ -129,15 +129,16 @@ classdef (Sealed) openrocket < handle
             % NOTE Does not automatically simulate outdated simulation
             % NOTE All variables are unitless or MKS
             arguments
-                sim {openrocket.check_class(sim, "document.Simulation")};
+                sim {openrocket.mustBeA(sim, "document.Simulation")};
                 variables string = openrocket.types.keys;
             end
 
-            openrocket.check_strings(variables, openrocket.types.keys, ...
-                "Invalid value for <variables>. ")
+            mustBeMember(variables, openrocket.types.keys);
+            % mustBeMember(variables, openrocket.types.keys, ...
+            %     "Invalid value for <variables>. ")
 
             if string(sim.getStatus) ~= openrocket.status_uptodate
-                error("Simulation not up to date. Please remember to run openrocket.simulate().");
+                error("Simulation not up to date. Run openrocket.simulate().");
             end
 
             variables = variables(variables ~= openrocket.time_name);
@@ -195,7 +196,7 @@ classdef (Sealed) openrocket < handle
             %   streamer = openrocket.search_components(or.rocket(), name = "Streamer");
 
             arguments
-                parent {openrocket.check_class(parent, ...
+                parent {openrocket.mustBeA(parent, ...
                     "rocketcomponent.RocketComponent")};
                 params.name (1,1) string = "";
                 params.class (1,1) string = "";
@@ -225,7 +226,7 @@ classdef (Sealed) openrocket < handle
         % Copy a flight configuration to do weird stuff without modifying the document
         function copy = copy_config(cfg, name)
             arguments
-                cfg {openrocket.check_class(cfg, "rocketcomponent.FlightConfiguration")}
+                cfg {openrocket.mustBeA(cfg, "rocketcomponent.FlightConfiguration")}
                 name (1,1) string = string(cfg.getName) + " Copy";
             end
 
@@ -451,7 +452,7 @@ classdef (Sealed) openrocket < handle
             
             arguments
                 obj openrocket;
-                name (1,1) string {openrocket.check_strings(name, ...
+                name (1,1) string {mustBeMember(name, ...
                     ["drogue", "main", "fins", "mount", "nose"])};
                 multiple (1,1) logical = false;
             end
@@ -516,14 +517,14 @@ classdef (Sealed) openrocket < handle
             %   event.set
             arguments
                 obj openrocket
-                chute {openrocket.check_class(chute, "rocketcomponent.RecoveryDevice")};
+                chute {openrocket.mustBeA(chute, "rocketcomponent.RecoveryDevice")};
                 sim = [];
             end
 
             if isempty(sim)
                 id = obj.document.getSelectedConfiguration.getId;
             else
-                openrocket.check_class(sim, "document.Simulation", ...
+                openrocket.mustBeA(sim, "document.Simulation", ...
                     "Simulation argument used. ");
                 id = sim.getFlightConfigurationId;
             end
@@ -570,7 +571,7 @@ classdef (Sealed) openrocket < handle
             %       coefficients are accessed through their Java accessors
             arguments
                 obj openrocket;
-                fc {openrocket.check_class(fc, "aerodynamics.FlightConditions")};
+                fc {openrocket.mustBeA(fc, "aerodynamics.FlightConditions")};
             end
 
             cfg = obj.get_config();
@@ -587,7 +588,7 @@ classdef (Sealed) openrocket < handle
             %       CNa     Normal force derivative
             arguments
                 obj openrocket;
-                fc {openrocket.check_class(fc, "aerodynamics.FlightConditions")};
+                fc {openrocket.mustBeA(fc, "aerodynamics.FlightConditions")};
             end
 
             cfg = obj.get_config();
@@ -621,7 +622,7 @@ classdef (Sealed) openrocket < handle
             %       moi     Principal moments about [roll; pitch; yaw] (kg*m^2)
             arguments
                 obj openrocket;
-                state (1,1) string {openrocket.check_strings(state, ["LAUNCH", "BURNOUT"])};
+                state (1,1) string {mustBeMember(state, ["LAUNCH", "BURNOUT"])};
             end
 
             cfg = obj.get_config();
@@ -645,8 +646,8 @@ classdef (Sealed) openrocket < handle
             %       ssm     Stability margin, in calibers
             arguments
                 obj openrocket;
-                state (1,1) string {openrocket.check_strings(state, ["LAUNCH", "BURNOUT"])};
-                fc {openrocket.check_class(fc, "aerodynamics.FlightConditions")};
+                state (1,1) string {mustBeMember(state, ["LAUNCH", "BURNOUT"])};
+                fc {openrocket.mustBeA(fc, "aerodynamics.FlightConditions")};
             end
 
             cfg = obj.get_config();
@@ -782,9 +783,10 @@ classdef (Sealed) openrocket < handle
             % slight speed improvment over <list = double(toArray(jarr))>;
         end
 
-        function check_class(input, classname, prefix)
+        function mustBeA(input, classname, prefix)
             % Validate that the input is or inherits from the specified class name 
-            % Prepends net.sf.openrocket - not necessary for MATLAB types, which support direct validation
+            % Behaves like <mustBeA>, but prepends net.sf.openrocket 
+            % not necessary for MATLAB types, which support direct validation
             arguments
                 input
                 classname (1,1) string;
@@ -796,31 +798,6 @@ classdef (Sealed) openrocket < handle
                     sprintf("\n%sExpected %s\nGot %s", prefix, fullname, class(input)));
                 throwAsCaller(ME);
             end
-        end
-
-        function check_strings(input, strings, prefix)
-            % Validate that all members of the input are in the defined strings
-            arguments
-                input string;
-                strings string;
-                prefix (1,1) string = "";
-            end
-            isn_t = find(~ismember(input, strings));
-            if isempty(isn_t)
-                return;
-            end
-
-            string_print = compose("\t%s\n", strings).join("");
-            if isscalar(input)
-                text = "Input must be one of";
-            elseif isscalar(isn_t)
-                text = sprintf("Input at index %d is '%s', must be one of", input(isn_t), isn_t);
-            else
-                text = sprintf("Input at index %s must be one of", mat2str(isn_t));
-            end
-
-            ME = MException("openrocket:invalid_value", sprintf("%s%s\n%s", prefix, text, string_print));
-            throwAsCaller(ME);
         end
     end
 end
