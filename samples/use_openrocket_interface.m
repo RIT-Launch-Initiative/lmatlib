@@ -2,16 +2,22 @@ set(groot, "DefaultAxesNextPlot", "add");
 clear; close all;
 
 %% Basic plots
-otis = openrocket("data/OTIS.ork");
-sim = otis.sims(1); % get simulation by number (name also works)
 
-drogue = otis.shortname("drogue"); % get shortcut to drogue chute
-event = otis.get_deploy(drogue, sim); % get event for drogue chute
+
+otis_path = "data/OTIS.ork"; %pfullfile("samples", "data", "OTIS.ork");
+if ~isfile(otis_path)
+    error("No document '%s' found for OR sample. Make sure [samples/] is the current working folder or otherwise on the PATH.", otis_path);
+end
+otis = openrocket(otis_path);
+sim = otis.sims(1); % get simulation by number
+
+drogue = otis.component(name = "Streamer"); % get streamer 
+event = openrocket.get_deploy(drogue, sim); % get event for drogue chute
 event.setDeployDelay(3); % 3-second drogue delay
 
-otis.simulate(sim); % execute simulation
+openrocket.simulate(sim); % execute simulation
 data = openrocket.get_data(sim); % get all of the simulation's outputs
-% equivalently, data = otis.simulate(sim, outputs = "ALL") will do the same thing
+% equivalently, data = openrocket.simulate(sim, outputs = "ALL") will do the same thing
 
 figure(name = "Basic plots");
 tiledlayout(2,1);
@@ -25,10 +31,12 @@ plot_openrocket(data, "Stability margin", "Angle of attack", ...
     start_ev = "LAUNCHROD", end_ev = "APOGEE", labels = ["LAUNCHROD", "BURNOUT"]);
 
 %% Fin height sweep
-otis = openrocket("data/OTIS.ork");
+otis = openrocket(otis_path);
 sim = otis.sims("20MPH-SA");
-fins = otis.shortname("fins");
-% fins = otis.component("Trapezoidal Fins");
+fins = otis.component(class = "FinSet"); 
+if ~isscalar(fins)
+    error("Multiple fin sets found");
+end
 fh = fins.getHeight();
 
 heights = fh * (0.8:0.05:1.2); % vary height from 80% to 120%
@@ -49,7 +57,7 @@ for i = 1:length(heights)
     ssm_reference(i) = otis.stability("LAUNCH", ref_fcond);
 
     % Simulate 
-    data = otis.simulate(sim, stop = seconds(3), outputs = "Stability margin"); 
+    data = openrocket.simulate(sim, stop = seconds(3), outputs = "Stability margin"); 
     % stop at 3 seconds to not simulate much after burnout - significant performance benefit
 
     % Cut data to range of interest
@@ -82,7 +90,7 @@ launch_spread = 4;
 wind_speed_spread = 5;
 wind_angle_spread = 60;
 
-otis = openrocket("data/OTIS.ork");
+otis = openrocket(otis_path);
 sim = otis.sims("15MPH-SA");
 opts = sim.getOptions();
 opts.setWindTurbulenceIntensity(0.15);
@@ -100,7 +108,7 @@ for i = 1:length(data_out)
         deg2rad((rand()-0.5)*wind_angle_spread));
     opts.setWindSpeedAverage(wind_speed + (rand()-0.5)*wind_speed_spread);
 
-    data_out{i} = otis.simulate(sim, outputs = "ALL");
+    data_out{i} = openrocket.simulate(sim, outputs = "ALL");
 end
 
 figure(name = "Landing point spread");
@@ -118,7 +126,7 @@ title(sprintf("Landing point spread for %s\n Rod \\pm %.1f deg, Wind \\pm %.1f m
 % Don't actually do this - we don't know any conditions to enough precision to
 % make this number useful. But, it serves as an example.
 
-otis = openrocket("data/OTIS.ork");
+otis = openrocket(otis_path);
 sim = otis.sims("15MPH-SA");
 weight_opt_cost = make_cost_function(otis, sim, "Adjustable stability weight");
 
@@ -128,8 +136,8 @@ opts = optimset(Display = "iter", OutputFcn = stop_close_enough);
 opt_weight = fminsearch(weight_opt_cost, 1.5, opts);
 
 % sim.getOptions().setWindTurbulenceIntensity(0);
-otis.component("Adjustable stability weight").setComponentMass(opt_weight);
-data = otis.simulate("15MPH-SA", outputs = "ALL");
+otis.component(name = "Adjustable stability weight").setComponentMass(opt_weight);
+data = openrocket.simulate(sim, outputs = "ALL");
 
 figure(name = "Optimized trajectory");
 plot_openrocket(data, "Altitude", "Vertical velocity", labels = ["BURNOUT", "APOGEE", "MAIN"]);
@@ -145,7 +153,7 @@ function func = make_cost_function(doc, sim, tuned_name)
 
     sim.getOptions().setWindTurbulenceIntensity(0);
 
-    tuned_mass = doc.component(tuned_name);
+    tuned_mass = doc.component(name = tuned_name);
     apogee_target = 3048;
     
     func = @cost;

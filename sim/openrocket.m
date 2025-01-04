@@ -4,30 +4,11 @@
 % simulations.
 % 
 % OVERVIEW
-% The class provides the user with the ability to load an OpenRocket program
-% instance, open a document, and save it. Minimally, the `document` field is
-% sufficient to do everything else. All of the objects are reference-type
-% (handle), not copy-on-write as you may be used to in MATLAB. Unless you
-% deep-copy an object, modifying members of this class will modify the
-% underlying OpenRocket document. Very common operations, namely running
-% simulations, finding components, and basic inertial and aerodynamic outputs
-% are also wrapped into helper functions for ease-of-use. 
+% The class starts the required Java modules to open an OpenRocket document,
+% make modifications, and save it. The object methods are concise wrappers for
+% accessing parts of the document. The class methods are concise wrappers for
+% acting on parts of the document.
 % 
-% If you are programmatically modifying the simulation, you will likely need to
-% use the relevant Java object's methods directly (getOptions(), setHeight(),
-% ...). They are usually self-explanatory (if somewhat cumbersome).
-% Tab-completion works for Java object methods, but to get a complete list of
-% the methods available, you can use methodsview(class(java_object)), for example:
-%   or = openrocket("test.ork");
-%   fins = or.shortname("fins");
-%   methodsview(class(fins))
-%
-% In some cases, parts of the rocket or simulation are held under
-% FlightConfigurations. Quantities dependent on FlightConfigurations, such as
-% aerodynamics, ineritas, or recovery events, will require a
-% FlightConfiguration to operate on. Usually, if one is not provided, they
-% assume the selected configuration is the desired one.
-%   
 % PREREQUISITES
 %   - OpenRocket installation, containing jre/ and OpenRocket.jar class file
 %   - Version of MATLAB <a href="https://www.mathworks.com/support/requirements/openjdk.html">compatible</a> with the Java version used by OpenRocket. 
@@ -35,38 +16,49 @@
 %   requires MATLAB 2024a or newer
 %   - Set up Java class path and Java environment using openrocket_setup(...)
 % 
+% There are four types of OpenRocket object to pay attention to:
+% - Document, which contains the Rocket, FlightConfigurations, and Simulations.
+% - RocketComponent, which store the components' properties and possibly other
+% components.
+% - FlightConfiguration, which store settings for recovery events and motor
+% mounts.
+% - Simulation, which contain the settings for a given simulaation, including
+% the Rocket, FlightConfiguration, and SimulationOptions.
+%
+% NOTES
+% - The <document> member is theoretically enough to perform any action in
+% OpenRocket programmatically. 
+% - All Java objects in OpenRocket are reference-type (handle), not
+% copy-on-write as is typical for MATLAB. Unless an object is deep-copied,
+% modifying instances will modify the underlying OpenRocket document.
+% 
+% 
+% If you are programmatically modifying the simulation, you will likely need to
+% use the relevant Java object's methods directly (getOptions(), setHeight(),
+% ...). They are usually self-explanatory (if somewhat cumbersome).
+% Tab-completion works for Java object methods, but to get a complete list of
+% the methods available, you can use methodsview(class(java_object)), for example:
+%   or = openrocket("test.ork");
+%   fins = or.component(class = "FinSet");
+%   methodsview(class(fins))
+% 
 %% LISTING
-% Static utilities
-% openrocket.get_data(sim[, variables])         :retrieve data from up-to-date simulation
-% openrocket.search_components(rkt, mode, key)  :search Rocket object's
-%   children for components by name or class
-% openrocket.list_variables()                   :list possible flight data variables
-% -----------------------------------------------------------------------------------
+% [Inputs and outputs in brackets are optional]
+% Document methods ------------------------------------------------------------
+% or = openrocket(path)
+%   Load .ork file into object
+% or.save()
+%   Save modifications to original file
+% component = or.components(Name, Value)
+%   Find components by exact name (e.g. "Trapezoidal Fins", "Streamer") or
+%   RocketComponent subclass (e.g. "NoseCone", "RecoveryDevice")
+% config = or.get_config([identifier])
+%   Get FlightConfiguration by name or number, defaulting to active one
+% or.set_config(config)
+%   Set active FlightConfiguration
 % 
-% Document methods
-% or = openrocket(path)                 :construct interface from path to .ork file
-% or.save()                             :save modiied OpenRocket file to original document
-% rkt = or.rocket()                     :return document's Rocket object
-% cfg = or.get_config([identifier])     :get FlightConfiguration by name or number,
-%   returning active one if unspecified
-% or.set_config(cfg)                    :set active FlightConfiguration
-% part = or.component(name)             :get component(s) by name
-% part = or.shortname(name)             :get common key components by name -
-%   "main", "drogue", etc.
-% event = or.get_deploy(chute[, sim])   :get deployment event for a specific parachute, 
-%   optionally for a specific sim
-% -----------------------------------------------------------------------------------
-% Simulation methods
-% 
-% sim = or.sims([identifier])           :retrieve Simulation by name or number,
-%   returning all if unspecified
-% [data =] or.simulate(identifier[, stop = "apogee"][, outputs = [...]])
-%   Execute simulation (using the same identifier as before), optionally
-%   returning data through "outputs".
-% -----------------------------------------------------------------------------------
-% Aerodynamic and inertial calculations
+% Aerodynamic and inertial calculations ---------------------------------------
 % (Unless otherwise specified, these methods use the active FlightConfiguration)
-% 
 % fc = or.flight_condition([mach, aoa, theta, rpy_rate])
 %   Get FlightCondition object to use for aerodynamic methods
 % data = or.aerodata6(fc)       :get AerodynamicForces object for 6-DOF simulation
@@ -77,7 +69,18 @@
 %   Get inertial properties at LAUNCH or BURNOUT
 % ssm = obj.stability(state, fc)
 %   Get stability at LAUNCH or BURNOUT, at specified flight condition
-
+% 
+% Class methods ---------------------------------------------------------------
+% [data = ]openrocket.simulate(sim[, stop = <stop condition>][, outputs = <variable names>]);
+%   Execute simulation, optionally specifying an early stop, optionally converting output data
+% data = openrocket.get_data(sim[, variables])
+%   retrieve data from up-to-date simulation
+% openrocket.list_variables()                   
+%   list possible flight data variables
+% event = openrocket.get_deploy(chute, sim)
+%   Get the deployment event a parachute is configured with in a specific sim
+% config = openrocket.copy_config(config[, name])
+%   Deep-copy a FlightConfiguration to modify sim without affecting existing configurations
 
 % Written by Yevgeniy Gorbachev
 % November 2024
@@ -118,10 +121,82 @@ classdef (Sealed) openrocket < handle
 
 %% STATIC UTILITIES
     methods (Static, Access = public)
+        function data = simulate(sim, params)
+            % Simulate an OpenRocket simulation 
+            %   [data = ]openrocket.simulate(ident[, stop = <stop condition>][, outputs = <variables>])
+            %       ident       Simulation number, or name, or object (returned fom sims(...))
+            %       stop        (Optional) Currently, only supports "apogee" to
+            %                   stop sim at apogee
+            %       outputs     (Optional) Convert flight data
+            %                   String array e.g. ["Altitude", "Stability margin"]
+            %                   magic value of "ALL" outputs all values
+            %   EXAMPLES
+            %       or = openrocket("data/OTIS.ork");
+            %       sim = or.sims(1);
+            %       % Simulate using object, up to apogee, do not output data
+            %       openrocket.simulate(sim, stop = "apogee"); 
+            %       Simulate and get all outputs
+            %       data = openrocket.simulate(sim, output = "ALL");  
+
+            arguments
+                sim (1, 1) {openrocket.mustBeA(sim, "document.Simulation")};
+                params.stop (1, :) = [];
+                params.outputs (1, :) string = [];
+            end
+
+
+            % NOTE if this is modified, make sure the input to simulate() is
+            % exactly the class Java expects - if it isn't, MATLAB thinks
+            % you're trying to call simulate() from some random Toolbox instead
+            % of giving a Java error.
+
+            import net.sf.openrocket.simulation.listeners.system.*
+            import net.sf.openrocket.simulation.extension.example.*
+            listener_class = "net.sf.openrocket.simulation.listeners.SimulationListener"; 
+            
+            outs = params.outputs;
+            if isempty(outs) && nargout > 0
+                error("Simulation output assigned, but not requested through 'outputs = ...'");
+            elseif ~isempty(outs) && nargout == 0
+                warning("Simulation output requested through 'outputs = ....', but not assigned.");
+            end
+
+            listeners = javaArray(listener_class, 0); %#ok 
+            % listeners has an #ok on both lines because the sim call is in an
+            % evalc() so MATLAB doesn't know we're using this variable and warns
+            extensions = java.util.List.of();
+            if isstring(params.stop) && params.stop == "apogee"
+                listeners = javaArray(listener_class, 1);
+                listeners(1) = OptimumCoastListener.INSTANCE; %#ok
+            elseif isduration(params.stop)
+                stopper = StopSimulation();
+                stopper.setStopStep(intmax);
+                stopper.setReportRate(intmax);
+                stopper.setStopTime(seconds(params.stop));
+                extensions = java.util.List.of(stopper);
+            end
+
+            sim.copyExtensionsFrom(extensions);
+
+            % The stop simulation listener feels the need to print directly to
+            % the command line instead of the logging queue, so we eat sim's
+            % output with evalc so it doesn't pollute our command line.
+            evalc("sim.simulate(listeners)");
+
+            sim.copyExtensionsFrom(java.util.List.of());
+            
+            if ~isempty(outs) && nargout > 0
+                if outs == "ALL"
+                    data = openrocket.get_data(sim);
+                else
+                    data = openrocket.get_data(sim, outs);
+                end
+            end
+        end
 
         function data = get_data(sim, variables)
             % Retreive data from an OpenRocket simulation
-            % data = get_data(sim, variables)
+            % data = openrocket.get_data(sim[, variables])
             %   sim         Simulation object (returned by openrocket.sims() or directly accessed)
             %   variables   (Optional) list of variables to return
             %               Defaults to add all of them
@@ -181,50 +256,16 @@ classdef (Sealed) openrocket < handle
             data.Properties.Description = "openrocket"; % Identify as OpenRocket import
         end
 
-        function parts = search_components(parent, params)
-            % Search rocket for components
-            % parts = search_components(parent, class = <component class name>)
-            %   parent  Rocket object (or subcomponent)
-            %   class   Java class name under net.sf.openrocket.rocketcomponent
-            % parts = search_components(parent, name = <component name>)
-            %   parent  Rocket object (or subcomponent)
-            %   name    Case-sensitive name
-            %   
-            %   EXAMPLES
-            %   or = openrocket("test.ork");
-            %   fins = openrocket.search_components(or.rocket(), class = "FinSet");
-            %   streamer = openrocket.search_components(or.rocket(), name = "Streamer");
 
-            arguments
-                parent {openrocket.mustBeA(parent, ...
-                    "rocketcomponent.RocketComponent")};
-                params.name (1,1) string = "";
-                params.class (1,1) string = "";
-            end 
-
-            if params.name == "" && params.class == ""
-                error("Specify name or class");
-            elseif params.name ~= "" && params.class ~= ""
-                error("Specify name or class, not both");
-            end
-
-            parts = parent.getAllChildren().toArray();
-            if params.name ~= ""
-                match = string(parts) == params.name;
-            elseif params.class ~= ""
-                jclass = sprintf("net.sf.openrocket.rocketcomponent.%s", params.class);
-                match = false(size(parts));
-                for i_part = 1:numel(parts)
-                    match(i_part) = isa(parts(i_part), jclass);
-                end
-            end
-
-            parts = parts(match);
-        end
-
-
-        % Copy a flight configuration to do weird stuff without modifying the document
         function copy = copy_config(cfg, name)
+            % Deep-copy a flight configuration
+            %   copy = copy_config(config[, name]);
+            %       config      FlightConfiguration to copy
+            %       name        (Optional) New configuration's name
+            %                   Defaults to old config's name + " Copy"
+            %       
+            %       copy        copied FlightConfiguration
+
             arguments
                 cfg {openrocket.mustBeA(cfg, "rocketcomponent.FlightConfiguration")}
                 name (1,1) string = string(cfg.getName) + " Copy";
@@ -244,6 +285,27 @@ classdef (Sealed) openrocket < handle
             end
         end
 
+        function dev = get_deploy(chute, sim)
+            % Get the deployment event for a recovery device
+            %   event = or.get_deploy(chute)
+            %       Use the globally selected flight configuration
+            %   event = or.get_deploy(chute, sim)
+            %       Use the simulation's specific flight configuration
+            % Set the event's recovery configuration using the methods
+            %    event.setRecoveryEvent(event.APOGEE);
+            % 
+            %   NOTE: Event types have to be accessed through the event object
+            %   (event.APOGEE) instead of just (APOGEE) because the
+            %   recoveryEvent enumeration is anonymous inside the RecoveryEvent
+            %   java class
+            arguments
+                chute (1,1) {openrocket.mustBeA(chute, "rocketcomponent.RecoveryDevice")};
+                sim (1, 1) {openrocket.mustBeA(sim, "document.Simulation")};
+            end
+
+            id = sim.getFlightConfigurationId;
+            dev = chute.getDeploymentConfigurations.get(id);
+        end
 
         function vars = list_variables
             % List available flight data types
@@ -255,21 +317,17 @@ classdef (Sealed) openrocket < handle
     methods 
         function obj = openrocket(orkpath)
             % Construct openrocket object from path to OpenRocket file
+            % or = openrocket(<path to ORK file>);
             arguments
-                orkpath (1,1) string
+                orkpath (1,1) string {mustBeFile};
             end
 
-            [status, info] = fileattrib(orkpath);
-            if ~status
-                error("File '%s' does not exist", orkpath);
-            end
-            path = info.Name;
-            [~, ~, ext] = fileparts(path);
+            [~, ~, ext] = fileparts(orkpath);
             if ext ~= ".ork"
-                error("File has extension '%s' instead of '.ork'", ext);
+                error("File has extension '%s', expected '.ork'", ext);
             end
 
-            obj.file = java.io.File(path);
+            obj.file = java.io.File(orkpath);
             obj.loader = net.sf.openrocket.file.GeneralRocketLoader(obj.file);
             obj.document = obj.loader.load();
         end
@@ -301,97 +359,11 @@ classdef (Sealed) openrocket < handle
             end
         end
 
-        function data = simulate(obj, ident, params)
-            % Simulate an OpenRocket simulation 
-            %   or.simulate(ident, stop = "", outputs = "")
-            %       ident       Simulation number, or name, or object (returned fom sims(...))
-            %       stop        (Optional) Currently, only supports "apogee" to
-            %                   stop sim at apogee
-            %       outputs     (Optional) Convert flight data
-            %                   String array e.g. ["Altitude", "Stability margin"]
-            %                   OUT 
-            %                   true (logical) outputs all values
-            %   EXAMPLES
-            %       or = openrocket("data/OTIS.ork");
-            %       sim = or.sims(1);
-            %       % Simulate using object, up to apogee
-            %       or.sim(sim, stop = "apogee"); 
-            %       % Simulate first simulation and assign all outputs
-            %       data = or.sim(1, output = "ALL");  
-            %       % Simulate named simulation, get stability data
-            %       data = or.sim("15MPH-SA", output = "Stability margin"); 
-
-            arguments
-                obj openrocket
-                ident
-                params.stop (1, :) = [];
-                params.outputs (1, :) string = [];
-            end
-
-
-            % NOTE if this is modified, make sure the input to simulate() is
-            % exactly the class Java expects - if it isn't, MATLAB thinks
-            % you're trying to call simulate() from some random Toolbox instead
-            % of giving a Java error.
-
-            import net.sf.openrocket.simulation.listeners.system.*
-            import net.sf.openrocket.simulation.extension.example.*
-            listener_class = "net.sf.openrocket.simulation.listeners.SimulationListener"; 
-            
-            if isa(ident, "net.sf.openrocket.document.Simulation")
-                sim = ident;
-            else
-                sim = obj.sims(ident);
-            end
-
-            if length(sim) ~= 1
-                error("More than one simulation specified:\n%s", mat2str(sims));
-            end
-
-            outs = params.outputs;
-            if isempty(outs) && nargout > 0
-                error("Simulation output assigned, but not requested through 'outputs = ...'");
-            elseif ~isempty(outs) && nargout == 0
-                warning("Simulation output requested through 'outputs = ....', but not assigned.");
-            end
-
-
-            listeners = javaArray(listener_class, 0); %#ok 
-            % listeners has an #ok on both lines because the sim call is in an
-            % evalc() so MATLAB doesn't know we're using this variable and warns
-            extensions = java.util.List.of();
-            if isstring(params.stop) && params.stop == "apogee"
-                listeners = javaArray(listener_class, 1);
-                listeners(1) = OptimumCoastListener.INSTANCE; %#ok
-            elseif isduration(params.stop)
-                stopper = StopSimulation();
-                stopper.setStopStep(intmax);
-                stopper.setReportRate(intmax);
-                stopper.setStopTime(seconds(params.stop));
-                extensions = java.util.List.of(stopper);
-            end
-
-            sim.copyExtensionsFrom(extensions);
-
-            % The stop simulation listener feels the need to print directly to
-            % the command line instead of the logging queue, so we eat sim's
-            % output with evalc so it doesn't pollute our command line.
-            evalc("sim.simulate(listeners)");
-
-            sim.copyExtensionsFrom(java.util.List.of());
-            
-            if ~isempty(outs) && nargout > 0
-                if outs == "ALL"
-                    data = openrocket.get_data(sim);
-                else
-                    data = openrocket.get_data(sim, outs);
-                end
-            end
-        end
 
         function rkt = rocket(obj)
             % Get Rocket object 
             %   rkt = or.rocket();
+
             rkt = obj.document.getRocket();
         end
 
@@ -425,112 +397,34 @@ classdef (Sealed) openrocket < handle
             obj.rocket().setSelectedConfiguration(cfg.getId);
         end
 
-        function parts = component(obj, name)
-            % Search entire Rocket for component name
-            %   component = or.component(name)
+        function components = component(obj, mode, key)
+            % components = obj.component(Name, Value)
+            % components = obj.component(class = <class name>)
+            %   class   Java class name under net.sf.openrocket.rocketcomponent
+            % components = obj.component(name = <component name>)
+            %   name    Component name - exact case-sensitive match
+            % 
+            %   EXAMPLES
+            %   or = openrocket("test.ork");
+            %   fins = or.component(class = "FinSet");
+            %   streamer = or.component(name = "Streamer");
 
-            rkt = obj.rocket();
-            parts = openrocket.search_components(rkt, name = name);
-            if isempty(parts)
-                error("Could not find part '%s'", name);
-            elseif length(parts) >= 2
-                error("Found %d components named '%s'", length(parts), name);
-            end
-        end
-
-        function part = shortname(obj, name, multiple)
-            % Search Rocket for generic component
-            %   part = or.shortname(name, multiple = false)
-            %   name is one of
-            %           "drogue": recovery device configured for APOGEE or EJECTION
-            %           "main": recovery device configured for ALTITUDE, or the
-            %           recovery device if there is only one, regardless of configuration.
-            %           "fins": fin set
-            %           "mount": motor mount
-            %           "nose": nose cone
-            %   multiple = true allows return of multiple parts, defaults to false
-            
             arguments
                 obj openrocket;
-                name (1,1) string {mustBeMember(name, ...
-                    ["drogue", "main", "fins", "mount", "nose"])};
-                multiple (1,1) logical = false;
+                mode (1, 1) string {mustBeMember(mode, ["name", "class"])};
+                key (1, 1) string;
             end
 
             rkt = obj.rocket();
-            cfg = obj.get_config();
 
-            switch name
-                % repeated code is ugly, but not repeating it will be uglier
-                case "drogue" % all parachutes set to deploy at apogee or with ejection charge
-                    chutes = openrocket.search_components(rkt, class = "RecoveryDevice");
-                    to_return = false(size(chutes));
-                    for i = 1:numel(chutes)
-                        dep_cfg = chutes(i).getDeploymentConfigurations.get(cfg.getId);
-                        ev = dep_cfg.getDeployEvent;
-                        to_return(i) = ev == ev.APOGEE || ev == ev.EJECTION;
-                        % APOGEE and EJECTION are members of <ev> becuase it is
-                        % not straightforward to get at anonymous class members
-                        % more directly
-                    end
-                    part = chutes(to_return);
-                case "main" % all parachutes set to deploy at specific altitude
-                    chutes = openrocket.search_components(rkt, class = "RecoveryDevice");
-                    to_return = false(size(chutes));
-                    for i = 1:numel(chutes)
-                        dep_cfg = chutes(i).getDeploymentConfigurations.get(cfg.getId);
-                        to_return(i) = dep_cfg.getDeployEvent == dep_cfg.getDeployEvent.ALTITUDE;
-                    end
-                    % If there is only one parachute, it is always main
-                    if isscalar(chutes)
-                        to_return = true;
-                    end
-                    part = chutes(to_return);
-                case "fins"
-                    part = openrocket.search_components(rkt, class = "FinSet");
-                case "mount"
-                    mounts = openrocket.search_components(rkt, class = "MotorMount");
-                    to_return = false(size(mounts));
-                    for i = 1:numel(mounts)
-                        to_return(i) = mounts(i).isMotorMount;
-                    end
-                    part = mounts(to_return);
-                case "nose"
-                    part = openrocket.search_components(rkt, class = "NoseCone");
-            end
-
-            if isempty(part) 
-                error("No part matching '%s' found");
-            elseif ~multiple && ~isscalar(part)
-                error("Multiple parts matching '%s' found", name);
+            switch mode
+                case "name"
+                    components = openrocket.search_components(rkt, "all", name = key);
+                case "class"
+                    components = openrocket.search_components(rkt, "all", class = key);
             end
         end
 
-        function dev = get_deploy(obj, chute, sim)
-            % Get the deployment event for a recovery device
-            %   event = or.get_deploy(chute)
-            %       Use the globally selected flight configuration
-            %   event = or.get_deploy(chute, sim)
-            %       Use the simulation's specific flight configuration
-            % Set the event's recovery configuration using the methods
-            %    event.setRecoveryEvent(event.APOGEE);
-            %   event.set
-            arguments
-                obj openrocket
-                chute {openrocket.mustBeA(chute, "rocketcomponent.RecoveryDevice")};
-                sim = [];
-            end
-
-            if isempty(sim)
-                id = obj.document.getSelectedConfiguration.getId;
-            else
-                openrocket.mustBeA(sim, "document.Simulation", ...
-                    "Simulation argument used. ");
-                id = sim.getFlightConfigurationId;
-            end
-
-            dev = chute.getDeploymentConfigurations.get(id);
-        end
     end
 
 
@@ -556,6 +450,7 @@ classdef (Sealed) openrocket < handle
 
             cfg = obj.get_config();
             fc = net.sf.openrocket.aerodynamics.FlightConditions(cfg);
+
             fc.setMach(mach);
             fc.setAOA(aoa);
             fc.setTheta(theta);
@@ -799,6 +694,55 @@ classdef (Sealed) openrocket < handle
                 throwAsCaller(ME);
             end
         end
+
+        function components = search_components(parent, depth, mode, key)
+            % Search rocket for components
+            % components = search_components(parent, depth, Name = Value)
+            %   parent  Rocket object (or subcomponent)
+            %   depth   "current" or "all" for immediate children or all children
+            % components = search_components(..., class = <class name>)
+            %   class   Java class name under net.sf.openrocket.rocketcomponent
+            % components = search_components(..., class = <class name>)
+            %   name    Component name - exact case-sensitive match
+            % 
+            %   EXAMPLES
+            %   or = openrocket("test.ork");
+            %   fins = openrocket.search_components(or.rocket(), "all", class = "FinSet");
+            %   streamer = openrocket.search_components(or.rocket(), "all", name = "Streamer");
+
+            arguments
+                parent {openrocket.mustBeA(parent, ...
+                    "rocketcomponent.RocketComponent")};
+                depth (1, 1) string {mustBeMember(depth, ["current", "all"])};
+                mode (1, 1) string {mustBeMember(mode, ["name", "class"])};
+                key (1, 1) string;
+            end 
+
+            
+            switch depth
+                case "current"
+                    components = parent.getChildren().toArray();
+                case "all"
+                    components = parent.getAllChildren().toArray();
+            end
+
+            switch mode
+                case "name"
+                    match = string(components) == key;
+                case "class"
+                    java_class_name = "net.sf.openrocket.rocketcomponent." + key;
+                    match = false(size(components));
+                    % for-loop required because isa() does not vectorize over an Array(List)
+                    for i_part = 1:numel(components)
+                        match(i_part) = isa(components(i_part), java_class_name);
+                    end
+            end
+
+            components = components(match);
+        end
+
+
     end
+
 end
 
