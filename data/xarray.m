@@ -21,22 +21,19 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
     methods
         function obj = xarray(data, axes, coordinates)
             arguments
-                data {mustBeA(data, ["double", "xarray"])};
+                data double;
             end
 
             arguments (Repeating)
-                axes (1, 1) string;
+                axes (1, :) string;
                 coordinates (1, :);
             end
             
-            if isa(data, "xarray")
-                obj = data;
-                return;
+            if ~isscalar(axes{1}) && iscell(coordinates{1})
+                axes = axes{1};
+                coordinates = coordinates{1};
             end
 
-            if isempty(data)
-                return;
-            end
             if length(axes) < ndims(data)
                 error("Not enough coordinate axes specified");
             end
@@ -54,27 +51,30 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
 
 %% MANIUPLATION
     methods (Access = public)
-        function obj = rename(obj, ax, new)
-            dim = obj.convertdims(ax);
-            obj.axes(dim) = new;
-        end
+        function obj = cat(dim, arrays)
+            arguments
+                dim (1,1) {mustBeA(dim, ["numeric", "string"])};
+            end
+            arguments (Repeating)
+                arrays xarray;
+            end
+            template = arrays{1};
+            dim = template.convertdims(dim);
 
-        function obj = cat(dim, varargin)
-            obj = varargin{1};
-            dim = convertdims(obj, dim);
+            to_compare = 1:naxes(template);
+            to_compare(dim) = [];
 
-            to_compare = 1:naxes(varargin{1});
-            to_compare = to_compare(to_compare ~= dim);
-            for i_obj = 2:length(varargin)
-                if ~obj.dimequal(varargin{i_obj}, to_compare)
+            for i_obj = 2:length(arrays)
+                if ~dimequal(template, arrays{i_obj}, to_compare)
                     error("Mismatched dimensions at position %d", i_obj);
                 end
             end
 
-            datas = cellfun(@(obj) obj.data, varargin, UniformOutput = false);
-            coords = cellfun(@(obj) obj.coordinates{dim}, varargin, UniformOutput = false);
-            obj.data = cat(dim, datas{:});
-            obj.coordinates{dim} = [coords{:}];
+            datas = cellfun(@(arry) arry.data, arrays, UniformOutput = false);
+            coords = cellfun(@(arry) arry.coordinates{dim}, arrays, UniformOutput = false);
+            template.data = cat(dim, datas{:});
+            template.coordinates{dim} = vertcat(coords{:});
+            obj = template;
         end
 
 
@@ -82,7 +82,8 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
             dimorder = obj.convertdims(order);
 
             if length(dimorder) ~= naxes(obj)
-                error("Dimension order must have exactly one entry per coordinate");
+                error("Dimension order must have exactly one entry per axis:\n%s", ...
+                    mat2str(obj.axes));
             end
 
             obj.data = permute(obj.data, dimorder);
@@ -106,14 +107,15 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
             end
             arguments (Repeating)
                 axes (1, 1) string;
-                values (1, :);
+                values (:, 1);
             end
 
             dims = obj.convertdims(axes{:});
             ops = repmat({':'}, 1, naxes(obj));
 
             for i_ax = 1:length(axes)
-                [~, ops{dims(i_ax)}] = ismember(values{i_ax}, obj.(axes{i_ax}));
+                [ops{dims(i_ax)}, ~] = find(values{i_ax}' == obj.coordinates{i_ax});
+                % [~, ops{dims(i_ax)}] = ismember(values{i_ax}, obj.(axes{i_ax}));
                 if ops{dims(i_ax)} == 0
                     ops{dims(i_ax)} = [];
                 end
@@ -231,19 +233,23 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
         end
     end
 
-%% INDEXING OVERRIDE
     methods (Access = protected)
-        % OVERRIDE PAREN REFERENCING TO SUBSCRIPT AXES
+%% INDEXING HELPER FUNCTIONS
         function dims = convertdims(obj, varargin)
+            % array from input
             dims = [varargin{:}];
-            if isstring(dims)
-                names = dims;
-                [present, dims] = ismember(names, obj.axes);
-                if any(~present)
-                    mex = MException("xarray:invalidAxis", ...
-                        "Unrecognized axis or property name '%s'", mat2str(names(~present)));
-                    throwAsCaller(mex);
-                end
+            if isnumeric(dims)
+                return;
+            end
+
+            % dims() is a string
+            names = dims;
+            matches = dims == obj.axes';
+            [dims, ~] = find(matches);
+            if length(dims) < length(names)
+                mex = MException("xarray:invalidAxis", ...
+                    "Unrecognized axis or property name(s) '%s'", names(~any(matches, 1)));
+                throwAsCaller(mex);
             end
         end
 
@@ -255,38 +261,79 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
             end
         end
 
-        function obj = parenReference(obj, op)
+        function indexcheck(obj, op)
             if length(op.Indices) ~= naxes(obj)
-                error("%d subscripts expected, got %d", naxes(obj), length(op.Indices));
+                mex = MException("xarray:indexing", ...
+                    "%d subscripts expected, got %d", ...
+                    naxes(obj), length(op.Indices));
+                throwAsCaller(mex);
             end
+        end
 
+%% INDEXING OVERRIDES
+        function obj = parenReference(obj, operations)
+            % Input processing and checking
+            op = operations(1);
+            indexcheck(obj, op);
+
+            % Index into data using all indices, index into each axis using its index
             obj.data = obj.data.(op);
-            for i = 1:naxes(obj)
-                obj.(obj.axes(i)) = obj.(obj.axes(i))(op.Indices{i});
+            for i_axis = 1:naxes(obj)
+                obj.coordinates{i_axis} = obj.coordinates{i_axis}(op.Indices{i_axis});
+            end
+
+            % Perform subsequent operations (if any)
+            if ~isscalar(operations)
+                obj = obj.(operations(2:end));
             end
         end
 
-        function obj = parenAssign(obj, op, subobj)
-            if length(op.Indices) ~= naxes(obj)
-                error("%d subscripts expected, got %d", naxes(obj), length(op.Indices));
+        function obj = parenAssign(obj, operations, subobj)
+            % Input processing and checking
+            if ~isscalar(operations)
+                error("Chained paren-assignment not supported")
+            end
+            op = operations(1);
+            indexcheck(obj, op);
+
+            % Test sub-object coordinates for equality
+            for i_axis = 1:naxes(obj)
+                coord = obj.coordinates{i_axis};
+                if ~isequal(coord(op.Indices{i_axis}), subobj.coordinates{i_axis})
+                    error("Unable to assign sub-array: mismatch along %s", obj.names(i_axis));
+                end
             end
 
-            dest = obj.(op);
-            if ~all(dest.dimequal(subobj, 1:naxes(dest)))
-                error("Dimensions not equal");
-            end
-            obj.data(op.Indices{:}) = subobj.data;
+            % Apply operation
+            obj.data.(op) = subobj.data;
         end
 
-        function parenDelete(~, ~)
-            error("xarray does not support paren-deletion");
+        function obj = parenDelete(obj, operations)
+            % Input processing and checking
+            if ~isscalar(operations)
+                error("Chained paren-deletion not supported")
+            end
+            op = operations(1);
+            indexcheck(obj, op);
+
+            for i_axis = 1:naxes(obj)
+                obj.coordinates{i_axis}(op.Indices{i_axis}) = [];
+            end
+
+            obj.data.(op) = [];
         end
         
         function n = parenListLength(~, ~, ~)
             n = 1;
         end
 
-        function data = braceReference(obj, op)
+        function data = braceReference(obj, operations)
+            % Input processing and checking
+            if ~isscalar(operations)
+                error("Chained brace-reference not supported")
+            end
+
+            op = operations(1);
             data = obj.data(op.Indices{:});
         end
         
@@ -299,42 +346,38 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
         end
 
         % OVERRIDE DOT-INDEXING TO ACCESS ARRAY AXES
-        function coord = dotReference(obj, op)
-            axis = op(1).Name;
-            axis_idx = find(axis == obj.axes);
-            if isempty(axis_idx)
-                error("No axis '%s'", axis);
-            end
-            % if the data is subsequently time-indexed
-            if length(op) == 2
-                coord = obj.coordinates{axis_idx}.(op(2));
-            else
-                coord = obj.coordinates{axis_idx};
+        function coord = dotReference(obj, operations)
+            op = operations(1);
+
+            dim = obj.convertdims(op.Name);
+            coord = obj.coordinates{dim};
+
+            if ~isscalar(operations)
+                coord = coord.(operations(2:end));
             end
         end
 
         function obj = dotAssign(obj, op, input)
             arguments
                 obj xarray;
-                op matlab.indexing.IndexingOperation;
-                input (1, :);
+                op (1,1) matlab.indexing.IndexingOperation;
+                input (:, 1);
             end
+
             axis = op.Name;
-            if ismember(axis, ["data", "axes", "coordinates"])
-                error("'%s' already used as xarray property name", axis);
-            end
-            if ~isvector(input)
-                error("Coordinates must be a vector");
-            end
+
 
             axis_idx = find(axis == obj.axes);
             if isempty(axis_idx)
-                axis_idx = length(obj.axes) + 1;
+                if any(axis == properties(obj)) || any(axis == methods(obj))
+                    error("'%s' already used as object property or method", axis);
+                end
+                axis_idx = length(obj.axes) + 1; % create a new axis if it doesn't exist
             end
 
             if length(input) ~= size(obj.data, axis_idx)
-                error("Mismatch in dimension %d: Data is %d, coordinates are %d", ...
-                    axis_idx, size(obj.data, axis_idx), length(input));
+                error("Dimension mismatch: size(data, %d) = %d, length(%s) = %d", ...
+                    axis_idx, size(obj.data, axis_idx), axis, length(input));
             end
 
             obj.axes(axis_idx) = axis;
@@ -358,7 +401,8 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
         end
 
         function group = getPropertyGroups(obj)
-            prop_list = [cellstr(obj.axes); obj.coordinates];
+            prop_list = [cellstr(obj.axes); 
+                cellfun(@(c) c', obj.coordinates, UniformOutput = false)];
             prop_list = struct(prop_list{:});
             group = matlab.mixin.util.PropertyGroup(prop_list);
         end
