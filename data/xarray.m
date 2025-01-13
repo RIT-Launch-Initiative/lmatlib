@@ -1,5 +1,30 @@
-% Array with named coordinate variables
-% MATLAB implementation of xarray
+%% Array with named coordinate variables
+% Barebones MATLAB implementation of python-xarray
+% 
+% EXAMPLES:
+% % Create arrays
+% xarr = xarray(randi(100, 10, 50, 3), ...
+%     time = seconds(1:10), x = linspace(0, 10, 50), ...
+%     name = ["first", "second", "third"])
+% another_xarr = xarray(randi(100, 100, 50, 3), ...
+%     time = seconds(11:110), x = linspace(0, 10, 50), ...
+%     name = ["first", "second", "third"]) 
+% % Join arrays by axis name
+% xarr = cat("time", xarr, another_xarr)
+% % Permute by name
+% xarr = permute(xarr, ["name", "x", "time"])
+% Select values by membership in range
+% xarr = xarr.range(x = [2 5]) 
+% % Select values by tolerance around value
+% xarr = xarr.pickt(time = [seconds(4), seconds(1)], x = [4 0.5]) % select by tolerance around value
+% Select subset by equality with specific value
+% % Chain selections
+% xarr = xarr.pick(name = "second") 
+% % Chain selections
+% another_xarr = another_xarr.range(x = [2 5]).pickt(time = [seconds(20) seconds(2)]) % chain selections
+
+
+
 % Paren indexing: index into data and underlying axisinfo "normally"
 % Brace indexing: index into data only
 % Dot indexing: index into axes
@@ -20,6 +45,20 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
 
     methods
         function obj = xarray(data, axes, coordinates)
+            % Construct array with named coordinate variables
+            % xarr = xarray(data, axis1 = coordinates1, axis2 = coordinates2[, ...])
+            %   data                double array
+            %   axis1 ...           string axis name
+            %   coordinates1 ...    coordinate variables (vectors, any type)
+            % 
+            % xarr = xarray(data, axes, coordinates)
+            %   data                double array
+            %   axes ...            string array of axis names
+            %   coordinates ...     cell array of coordinate variables
+            % 
+            % Length of coordinate variables must match size(data, n). Trailing
+            % singleton dimensions are permitted (intended for later
+            % concatenation)
             arguments
                 data double;
             end
@@ -52,6 +91,9 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
 %% MANIUPLATION
     methods (Access = public)
         function obj = cat(dim, arrays)
+            % Concatenate xarray instances by named dimension
+            % xarr = cat(dimension, array1, array2, ...)
+            %   dimension   index or name
             arguments
                 dim (1,1) {mustBeA(dim, ["numeric", "string"])};
             end
@@ -79,11 +121,18 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
 
 
         function obj = permute(obj, order)
+            % Re-order axes by name or number
+            % xarr = permute(xarr, [dim1 dim2 ...]);
+
             dimorder = obj.convertdims(order);
 
             if length(dimorder) ~= naxes(obj)
                 error("Dimension order must have exactly one entry per axis:\n%s", ...
                     mat2str(obj.axes));
+            end
+            if issorted(dimorder)
+                % Dimensions are already in order, do nothing
+                return;
             end
 
             obj.data = permute(obj.data, dimorder);
@@ -92,16 +141,18 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
         end
 
         function obj = squeeze(obj)
+            % Remove singleton dimensions from object
             scalardims = size(obj) == 1;
             obj.data = squeeze(obj.data);
             obj.axes(scalardims) = [];
             obj.coordinates(scalardims) = [];
         end
 
-        % Index by exact equality, according to ismember(<values>, <coord>)
-        % Returns values in the order specified by <values>
-        % xarr.pick(axis = "value")
         function obj = pick(obj, axes, values)
+            % Index by exact equality, according to ismember(<values>, <coord>)
+            % Returns values in the order specified by <values>
+            % xarr.pick(axis = "value", ...)
+            
             arguments
                 obj xarray
             end
@@ -114,8 +165,7 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
             ops = repmat({':'}, 1, naxes(obj));
 
             for i_ax = 1:length(axes)
-                [ops{dims(i_ax)}, ~] = find(values{i_ax}' == obj.coordinates{i_ax});
-                % [~, ops{dims(i_ax)}] = ismember(values{i_ax}, obj.(axes{i_ax}));
+                [~, ops{dims(i_ax)}] = ismember(values{i_ax}, obj.(axes{i_ax}));
                 if ops{dims(i_ax)} == 0
                     ops{dims(i_ax)} = [];
                 end
@@ -124,9 +174,9 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
             obj = obj(ops{:});
         end
 
-        % Index by equality with tolerance
-        % xarr.range(axis = [center tol])
         function obj = pickt(obj, axes, ranges)
+            % Index by equality with tolerance
+            % xarr.range(axis = [center tol])
             arguments
                 obj xarray
             end
@@ -147,10 +197,10 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
             obj = obj(ops{:});
         end
 
-        % Index by range membership, according to min(rng) <= coord & coord <= max(rng)
-        % xarr.range(axis = [lower, upper])
-        %   [upper, lower] also works, and either can be +/- Inf
         function obj = range(obj, axes, ranges)
+            % Index by range membership, according to min(rng) <= coord & coord <= max(rng)
+            % xarr.range(axis = [lower, upper])
+            %   [upper, lower] also works, and either can be +/- Inf
             arguments
                 obj xarray
             end
@@ -172,6 +222,8 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
 
 
         function obj = index(obj, axes, indices)
+            % Index by logical or ordinal index
+            % xarr.index(axis = [indices...])
             arguments
                 obj xarray
             end
@@ -188,6 +240,44 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
             end
 
             obj = obj(ops{:});
+        end
+
+        % This is super repetitive, but I can't find a better way
+
+        function obj = plus(a, b)
+            obj = arithmetic(@plus, a, b);
+        end
+
+        function obj = minus(a, b)
+            obj = arithmetic(@minus, a, b);
+        end
+
+        function obj = uminus(obj)
+            obj = arithmetic(@minus, 0, obj);
+        end
+
+        function obj = times(a, b)
+            obj = arithmetic(@times, a, b);
+        end
+
+        function obj = rdivide(a, b)
+            obj = arithmetic(@rdivide, a, b);
+        end
+
+        function obj = power(a, b)
+            obj = arithmetic(@power, a, b);
+        end
+
+        function obj = mtimes(a, b)
+            obj = arithmetic(@times, a, b);
+        end
+
+        function obj = mrdivide(a, b)
+            obj = arithmetic(@rdivide, a, b);
+        end
+
+        function obj = mpower(a, b)
+            obj = arithmetic(@power, a, b);
         end
     end
 
@@ -234,6 +324,31 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
     end
 
     methods (Access = protected)
+        % override an arithmetic operation based on common rules
+        function obj = arithmetic(func, first, second)
+            first_isx = isa(first, "xarray");
+            second_isx = isa(second, "xarray");
+            if first_isx && second_isx
+                first = squeeze(first);
+                second = squeeze(second);
+
+                second = permute(second, first.axes);
+                if ~all(dimequal(first, second, 1:naxes(first)))
+                    mex = MException("xarray:mismatch", "Both arguments are xarrays, but axes are not equal");
+                    throwAsCaller(mex);
+                end
+
+                obj = first;
+                obj.data = func(obj.data, second.data);
+            elseif first_isx
+                obj = first;
+                obj.data = func(obj.data, second);
+            elseif second_isx
+                obj = second;
+                obj.data = func(first, obj.data);
+            end
+        end
+
 %% INDEXING HELPER FUNCTIONS
         function dims = convertdims(obj, varargin)
             % array from input
@@ -269,6 +384,7 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
                 throwAsCaller(mex);
             end
         end
+
 
 %% INDEXING OVERRIDES
         function obj = parenReference(obj, operations)
