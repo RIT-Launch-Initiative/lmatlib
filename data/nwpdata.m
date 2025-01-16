@@ -18,7 +18,7 @@ classdef (Abstract) nwpdata
             %   path        Path to GRIB2 file
             %   
             %   Required name-value arguments
-            %   elements    List of data elements (TMP, HGT, ...)
+            %   fields      List of data fields (TMP, HGT, ...)
             %   layers      List of data layers (0-SFC, 100000-ISBL, EATM)
             %   
             %   Optional name-value arguments are used to crop the read data to
@@ -32,57 +32,60 @@ classdef (Abstract) nwpdata
             %   side        Side length of square used to crop
             %   
             %   OUTPUTS
-            %   data        xarray with dimensions (y/x or lat/lon, layer, element, time)
+            %   data        xarray with dimensions (y/x or lat/lon, layer, field)
             %   raster      Location referencing object
-            %   metadata    Table containing information about layers and elements
+            %   metadata    Table containing information about layers and fields
             
             arguments
                 path (1,1) string {mustBeFile};
-                params.elements (1,:) string;
+                params.fields (1,:) string;
                 params.layers (1,:) string;
 
-                params.lat (1, 1) double = 0;
-                params.lon (1, 1) double = 0;
-                params.side (1, 1) double = Inf;
+                params.lats (1,2) double = [-Inf Inf];
+                params.lons (1,2) double = [-Inf Inf];
             end
 
             % Initialization
-            elements = params.elements;
+            fields = params.fields;
             layers = params.layers;
             info = georasterinfo(path);
 
             raster = info.RasterReference;
-            [raster, indices, axes] = nwpdata.crop_raster(raster, params.lat, params.lon, params.side);
+            [raster, indices, axes] = nwpdata.crop_raster(raster, params.lats, params.lons);
 
             metadata = info.Metadata;
-            all_bands = nwpdata.find_bands(metadata, elements, layers);
+            all_bands = nwpdata.find_bands(metadata, fields, layers);
             all_layers = metadata.ShortName(all_bands);
             layer_template = unique(all_layers);
-            data_array = cell(1, length(elements));
+            data_array = cell(1, length(fields));
 
-            for i_element = 1:length(elements)
-                element = elements(i_element);
-                bands = nwpdata.find_bands(metadata, element, layers);
+            for i_field = 1:length(fields)
+                field = fields(i_field);
+                bands = nwpdata.find_bands(metadata, field, layers);
                 layers = metadata.ShortName(bands);
+
                 if length(layers) ~= length(layer_template)
-                    error("Missing data for element %s at %s", element, ...
+                    error("Missing data for field %s at %s", field, ...
                         mat2str(setdiff(layer_template, layers)));
                 end
 
-                [element_data, ~] = readgeoraster(path, Bands = bands);
+                [field_data, ~] = readgeoraster(path, Bands = bands);
                 [~, ~, order] = intersect(layer_template, layers, "stable");
-                data_array{i_element} = element_data(indices{:}, order);
+                data_array{i_field} = field_data(indices{:}, order);
             end
 
+            args = {};
+            if ~isscalar(layer_template)
+                args = [args {"layer", layer_template}];
+            end
+            if ~isscalar(fields)
+                args = [args {"field", fields}];
+            end
             data = xarray(cat(4, data_array{:}), ...
-                axes{:}, layer = layer_template, element = elements);
-
-            time = metadata.ValidTime(1);
-            time.TimeZone = "UTC";
-            data.time = time;
+                axes{:}, args{:});
 
             if nargout == 3
-                metadata = metadata(all_bands, ["ShortName", "Element", "Unit", "Comment"]);
+                metadata = metadata(all_bands, ["ShortName", "Element", "Unit", "Comment", "ValidTime"]);
                 metadata = convertvars(metadata, ["ShortName", "Element"], "categorical");
             end
         end
@@ -153,76 +156,89 @@ classdef (Abstract) nwpdata
             [filename, url] = nwpdata.filename(model, product, date, forecast);
             files = bulk_download(dest, url, filename);
         end
+
     end
 
 %% INTERNAL UTILITIES
-methods (Static, Access = private)
-        function [raster, indices, axes] = crop_raster(raster, lat_c, lon_c, side)
+methods (Static, Access = protected)
+        function [raster, indices, axes] = crop_raster(raster, lats, lons)
+            arguments
+                raster 
+                lats (1,2) double;
+                lons (1,2) double;
+            end
             raster_type = raster.CoordinateSystemType;
+            
+            % retreiving the grid (vectors) for each raster and comparing them
+            % to lats/lons to get the inputs to (map/geo)crop lets this
+            % function more succinctly support infinite bounds for lats or lons
+            % if required
             switch raster_type
                 case "planar"
                     [x, y] = worldGrid(raster, "gridvectors");
 
-                    % if we need to crop, convert parameters to raster's coordinate system
-                    if isfinite(side)
-                        [x_c, y_c] = projfwd(raster.ProjectedCRS, lat_c, lon_c);
-                        x_lims = x_c + side/2*[-1 1];
-                        y_lims = y_c + side/2*[-1 1];
+                    % the lat/lon extrema can happen anywhere in the raster, depending on the projection
+                    % so we project and compare based on the entire grid
+                    [x_grid, y_grid] = worldGrid(raster); 
+                    [lat, lon] = projinv(raster.ProjectedCRS, x_grid, y_grid);
+                    x_in_range = x_grid(min(lons) <= lon & lon <= max(lons));
+                    y_in_range = y_grid(min(lats) <= lat & lat <= max(lats));
+                    x_lims = [min(x_in_range, [], "all") max(x_in_range, [], "all")];
+                    y_lims = [min(y_in_range, [], "all") max(y_in_range, [], "all")];
 
-                        [~, raster] = mapcrop(zeros(length(y), length(x)), raster, x_lims, y_lims);
-                        % need to use the new limits instead of x_lims/y_lims because mapcrop
-                        % leaves an extra element on either side
-                        row_idx = raster.YWorldLimits(1) <= y & y <= raster.YWorldLimits(2);
-                        col_idx = raster.XWorldLimits(1) <= x & x <= raster.XWorldLimits(2);
+                    [~, raster] = mapcrop(zeros(length(y), length(x)), raster, x_lims, y_lims);
+
+                    % need to use the new limits instead of x_lims/y_lims because mapcrop
+                    % leaves an extra element on either side
+                    row_idx = raster.YWorldLimits(1) <= y & y <= raster.YWorldLimits(2);
+                    col_idx = raster.XWorldLimits(1) <= x & x <= raster.XWorldLimits(2);
                         
-                        indices = {row_idx, col_idx};
-                        axes = {"y", y(row_idx), "x", x(col_idx)};
-                    else % pick everything without doing math
-                        indices = {':', ':'};
-                        axes = {"y", y, "x", x};
-                    end
+                    indices = {row_idx, col_idx};
+                    axes = {"y", y(row_idx), "x", x(col_idx)};
                 case "geographic"
                     [lat, lon] = geographicGrid(raster, "gridvectors");
-                    
-                    % if we need to crop, convert parameters to raster's coordinate system
-                    if isfinite(side)
-                        R = raster.GeographicCRS.Spheroid.MeanRadius;
-                        % convert length to degrees
-                        lat_lims = lat_c + rad2deg(side/R)/2 * [-1 1];
-                        lon_lims = lon_c + rad2deg(side/(R*cosd(mean(lat_lims))))/2 * [-1 1];
-                        
-                        [~, raster] = geocrop(zeros(length(lat), length(lon)), raster, lat_lims, lon_lims);
-                        % use new limits, same reason as for mapcrop() above
-                        row_idx = raster.LatitudeLimits(1) <= lat & lat <= raster.LatitudeLimits(2);
-                        col_idx = raster.LongitudeLimits(1) <= lon & lon <= raster.LongitudeLimits(2);
 
-                        indices = {row_idx, col_idx};
-                        axes = {"lat", lat(row_idx), "lon", lon(col_idx)};
-                    else % pick everything without doing mat
-                        indices = {':', ':'};
-                        axes = {"lat", lat, "lon", lon};
-                    end
+                    lat_in_range = lat(min(lats) <= lat & lat <= max(lats));
+                    lon_in_range = lon(min(lons) <= lon & lon <= max(lons));
+                    lon_lims = [min(lon_in_range, [], "all") max(lon_in_range, [], "all")];
+                    lat_lims = [min(lat_in_range, [], "all") max(lat_in_range, [], "all")];
+
+                    [~, raster] = geocrop(zeros(length(lat), length(lon)), raster, lat_lims, lon_lims);
+                    row_idx = raster.LatitudeLimits(1) <= lat & lat <= raster.LatitudeLimits(2);
+                    col_idx = raster.LongitudeLimits(1) <= lon & lon <= raster.LongitudeLimits(2);
+
+                    indices = {row_idx, col_idx};
+                    axes = {"lat", lat(row_idx), "lon", lon(col_idx)};
                 otherwise
-                    error("Unrecognized coordiante system type '%s'", raster_type);
+                    error("Unrecognized coordinate system type '%s'", raster_type);
             end
         end
 
-        function layers = find_bands(metadata, elements, layers)
-            % [layers] = FIND_BANDS(metadata, elements, layers)
-            % Find the layers (linear indices) matching any elements AND any layers
-            %   The components of (elements) and (layers) are joined by
+        function [x_out, y_out] = outline(x, y)
+            arguments
+                x (1, :) double;
+                y (1, :) double;
+            end
+            x_out = [repmat(x(1), 1, length(y)), x, repmat(x(end), 1, length(y)), flip(x)];
+            y_out = [y, repmat(y(end), 1, length(x)), flip(y), repmat(y(1), 1, length(x))];
+        end
+
+        function layers = find_bands(metadata, fields, layers)
+            % [layers] = FIND_BANDS(metadata, fields, layers)
+            % Find the layers (linear indices) matching any fields AND any layers
+            %   The components of (fields) and (layers) are joined by
             %   "(e1|e2|...)" and treated as regular expressions
             arguments
                 metadata table;
-                elements (1, :) string;
+                fields (1, :) string;
                 layers (1, :) string;
             end
 
-            elements = "(" + join(elements, "|") + ")";
+            fields = "(" + join(fields, "|") + ")";
             layers = "(" + join(layers, "|") + ")";
-            element_idx = ~cellfun(@isempty, regexp(metadata.Element, elements));
+            field_idx = ~cellfun(@isempty, regexp(metadata.Element, fields));
             layer_idx = ~cellfun(@isempty, regexp(metadata.ShortName, layers));
-            layers = find(element_idx & layer_idx);
+            layers = find(field_idx & layer_idx);
         end
     end
 end
