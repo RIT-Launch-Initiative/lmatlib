@@ -1,18 +1,20 @@
 % Bulk download files, checking for existing ones, with informative display output
-% [files, notfiles] = bulk_download(dest, urls, names)
+% [files, notfiles] = bulk_download(dest, urls, names[, reader])
 % INPUTS
 %   dest        destination folder
 %   urls        source URLs
 %   names       destination file names - appended to <dest>
+%   reader      function handle (name, url) -> logical (defaults to websave)
 % OUTPUTS
 %   files       files successfully downloaded
 %   notfiles    files not successfully downloaded
 
-function [files, notfiles] = bulk_download(dest, urls, names)
+function [files, notfiles] = bulk_download(dest, urls, names, reader)
     arguments
         dest (1, 1) string {mustBeFolder};
         urls (:, 1) string;
         names (:, 1) string;
+        reader (1, 1) function_handle = @websave;
     end 
 
     if length(urls) ~= length(names)
@@ -52,7 +54,7 @@ function [files, notfiles] = bulk_download(dest, urls, names)
     n_on_server = sum(on_server);
     if n_on_server > 0
         fprintf("%d files located on server:\n", n_on_server);
-        fprintf(listing(files(on_server), sizes(on_server)));
+        fprintf(listing(urls(on_server), sizes(on_server)));
     end
 
     n_nowhere = sum(~on_disk & ~on_server);
@@ -62,23 +64,26 @@ function [files, notfiles] = bulk_download(dest, urls, names)
     end
 
     % download the files located on server
-    for i_file = find(on_server(:)')
-        file_url = urls(i_file);
-        fprintf("Downloading %s from %s... ", format_filesize(sizes(i_file)), file_url)
+    i_on_server = find(on_server); % linear indices of files on server
+    for i_file = 1:length(i_on_server) % download the file described by each linear index
+        n_file = i_on_server(i_file);
+        file_url = urls(n_file);
+        fprintf("%d of %d: %s from %s... ", i_file, length(i_on_server), ...
+            format_filesize(sizes(n_file)), file_url)
 
         try
             tic;
-            downloaded = websave(files(i_file), file_url);
+            downloaded = reader(files(n_file), file_url);
             timed = toc;
-            if downloaded
-                on_disk(i_file) = true;
+            if downloaded % print status if done or not
+                on_disk(n_file) = true;
                 fprintf("succeeded in %.1f sec\n", timed);
             else
                 fprintf("failed\n");
             end
         catch mex % don't stop for anything
             fprintf("failed\n");
-            warning(getReport(mex, "basic"));
+            warning(getReport(mex));
         end
 
     end
@@ -87,6 +92,8 @@ function [files, notfiles] = bulk_download(dest, urls, names)
     files = files(on_disk);
 
     % Helper functions
+
+    % engineering format for file sizes
     function str = format_filesize(sizes)
         pwr = floor(log10(sizes)/3)*3;
         units = dictionary([-Inf 0 3 6 9 12], ["B ", "B ", "KB", "MB", "GB", "TB"]);
@@ -95,6 +102,7 @@ function [files, notfiles] = bulk_download(dest, urls, names)
         str = compose("%5.1f %s", reduced_sizes, units(pwr));
     end
 
+    % create directory listing
     function [str] = listing(files, sizes)
         assert(length(files) == length(sizes));
 
