@@ -35,7 +35,6 @@ classdef (Abstract) nwpdata
             %   data        xarray with dimensions (y/x or lat/lon, layer, field)
             %   raster      Location referencing object
             %   metadata    Table containing information about layers and fields
-            
             arguments
                 path (1,1) string {mustBeFile};
                 params.fields (1,:) string;
@@ -74,18 +73,14 @@ classdef (Abstract) nwpdata
                 data_array{i_field} = field_data(indices{:}, order);
             end
 
-            args = {};
-            if ~isscalar(layer_template)
-                args = [args {"layer", layer_template}];
-            end
-            if ~isscalar(fields)
-                args = [args {"field", fields}];
-            end
-            data = xarray(cat(4, data_array{:}), ...
-                axes{:}, args{:});
+            time = metadata.ValidTime(1);
+            time.TimeZone = "UTC";
+
+            axes = [axes {"layer", layer_template, "field", fields, "time", time}];
+            data = xarray(cat(4, data_array{:}), axes{:});
 
             if nargout == 3
-                metadata = metadata(all_bands, ["ShortName", "Element", "Unit", "Comment", "ValidTime"]);
+                metadata = metadata(all_bands, ["ShortName", "Element", "Unit", "Comment"]);
                 metadata = convertvars(metadata, ["ShortName", "Element"], "categorical");
             end
         end
@@ -212,15 +207,6 @@ methods (Static, Access = protected)
                 otherwise
                     error("Unrecognized coordinate system type '%s'", raster_type);
             end
-        end
-
-        function [x_out, y_out] = outline(x, y)
-            arguments
-                x (1, :) double;
-                y (1, :) double;
-            end
-            x_out = [repmat(x(1), 1, length(y)), x, repmat(x(end), 1, length(y)), flip(x)];
-            y_out = [y, repmat(y(end), 1, length(x)), flip(y), repmat(y(1), 1, length(x))];
         end
 
         function layers = find_bands(metadata, fields, layers)

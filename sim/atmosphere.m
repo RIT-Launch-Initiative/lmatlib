@@ -1,13 +1,16 @@
 % NOTE: Requires Mapping Toolbox, <nwpdata>, and <xarray>
 classdef atmosphere
     properties (GetAccess = public, SetAccess = protected)
-        data;
-        raster;
+        data % xarray;
+        raster % {mustBeA(raster, ["map.rasterref.MapPostingsReference", ...
+            % "map.rasterref.GeographicPostingsReference"])};
+        epoch (1,1) {mustBeA(epoch, ["datetime", "duration"])} = seconds(0);
     end
 
     properties (Access = protected)
         intrinsic_lat (1, 1) string;
-        intrinsic_lon (1, 1) string;
+        intrinsic_lon (1, 1) string
+        sample3_template (:, :) %xarray;
         interpolant (1, 1) griddedInterpolant;
     end
     
@@ -21,19 +24,16 @@ classdef atmosphere
             end
 
             data_array = cell(1, length(paths));
-            times = NaT(1, length(paths));
             isbl_regex = "(\d+)-ISBL";
 
             for i = 1:length(paths)
-                [data, raster, meta] = nwpdata.read(paths(i), ...
+                [data, raster] = nwpdata.read(paths(i), ...
                     fields = params.fields, layers = isbl_regex, ...
                     lats = params.lats, lons = params.lons);
                 baro_levels = string(regexp(string(data.layer), isbl_regex, "tokens"));
                 data.layer = str2double(baro_levels);
                 data = data.rename("layer", "pressure");
-
                 data_array{i} = sort(data, "pressure", "descend");
-                times(i) = meta.ValidTime(1);
             end
 
             obj.raster = raster;
@@ -48,25 +48,29 @@ classdef atmosphere
             end
 
             % input case: many time or 1 time
-            if isscalar(paths)
-                data = data_array{1};
-                data = permute(data, [obj.intrinsic_lat, obj.intrinsic_lon, "pressure", "field"]);
-                data = sort(data, [obj.intrinsic_lat, obj.intrinsic_lon], "ascend");
-                obj.data = data;
+            data = cat("time", data_array{:});
+            data = permute(data, [obj.intrinsic_lat, obj.intrinsic_lon, "time", "pressure", "field"]);
+            data = sort(data, [obj.intrinsic_lat, obj.intrinsic_lon, "time"], "ascend");
+            obj.epoch = data.time(1);
+            data.time = seconds(data.time - obj.epoch);
+
+            if isscalar(data.time)
                 obj.interpolant = griddedInterpolant(data.coordinates(1:2), double(data), ...
-                    "linear", "none");
+                    "linear", "nearest");
             else
-                data = cat("time", data_array{:});
-                data.time = times;
-                data = permute(data, [obj.intrinsic_lat, obj.intrinsic_lon, "time", "pressure", "field"]);
-                data = sort(data, [obj.intrinsic_lat, obj.intrinsic_lon, "time"], "ascend");
-                obj.data = data;
                 obj.interpolant = griddedInterpolant(data.coordinates(1:3), double(data), ...
-                    "linear", "none");
+                    "linear", "nearest");
             end
+            obj.data = data;
+            obj.sample3_template = data.index(...
+                obj.intrinsic_lat, 1, obj.intrinsic_lon, 1, "time", 1).squeeze;
         end
 
-        function [int_lat, int_lon] = get_intrinsic(obj, lat, lon)
+        function [int_lat, int_lon, int_time] = get_intrinsic(obj, lat, lon, time)
+            % [int_lat, int_lon, int_time] = get_intrinsic(atmos, lat, lon, time)
+            % Convert geographic-datetime coordinates to intrinsic (interpolant) coordinates
+            % Time is converted to seconds since epoch
+            % Lat/lon are returned unmodified 
             raster_type = obj.raster.CoordinateSystemType;
             if raster_type == "planar"
                 [int_lon, int_lat] = projfwd(obj.raster.ProjectedCRS, lat, lon);
@@ -74,36 +78,57 @@ classdef atmosphere
                 int_lat = lat;
                 int_lon = lon;
             end
+            int_time = seconds(time - obj.epoch);
         end
 
-        function out = sample3(obj, time, lat, lon)
-            [int_lat, int_lon] = obj.get_intrinsic(lat, lon);
+        function result = sample3(obj, time, lat, lon)
+            arguments
+                obj atmosphere;
+                time (1,1) {mustBeA(time, ["datetime", "duration"])};
+                lat (1,1) double;
+                lon (1,1) double;
+            end
             if length(obj.interpolant.GridVectors) == 2
+                [int_lat, int_lon, ~] = obj.get_intrinsic(lat, lon, obj.epoch);
                 out = obj.interpolant(int_lat, int_lon);
             elseif length(obj.interpolant.GridVectors) == 3
-                out = obj.interpolant(int_lat, int_lon, seconds(time));
+                [int_lat, int_lon, int_time] = obj.get_intrinsic(lat, lon, time);
+                out = obj.interpolant(int_lat, int_lon, int_time);
             end
-            out = xarray(squeeze(out), pressure = obj.data.pressure, field = obj.data.field);
+
+            result = obj.sample3_template;
+            result{:, :} = squeeze(out);
         end
 
         function varargout = sample4(obj, time, lat, lon, height, fields)
+            arguments
+                obj atmosphere;
+                time (1,1) {mustBeA(time, ["datetime", "duration"])};
+                lat (1,1) double;
+                lon (1,1) double;
+                height (1,1) double;
+                fields (1, :) string;
+            end
+
+            if nargout ~= length(fields)
+                warning("%d outputs requested, %d used", length(fields), nargout);
+            end
+
             samp = sample3(obj, time, lat, lon);
 
-            interp_data = [samp.layer(:), samp.double];
-            result = interp1(samp.pick(field = "HGT").double, interp_data, height);
-            result = xarray(result, height = height, field = ["PRES", samp.field]);
+            interp_data = [samp.pressure, samp.double];
+            result = interp1(samp.pick(field = "HGT").squeeze.double, interp_data, height);
+            result = xarray(result, field = ["PRES"; samp.field]);
 
             present = ismember(fields, result.field);
             if any(~present)
                 error("Data fields %s not found", fields(present));
             end
-            result = result.pick(field = fields);
+            result = result.pick(field = fields).double;
 
-            if nargout == 1
-                varargout{1} = result;
-            else
-                unpack = mat2cell(result.double, length(result.height), ones(1, length(result.field)));
-                [varargout{1:nargout}] = unpack{:};
+            varargout = cell(1, length(fields));
+            for i = 1:length(fields)
+                varargout{i} = result(i);
             end
         end
     end

@@ -9,7 +9,6 @@ date.TimeZone = "UTC";
 forecast = hours(0);
 urrg = launchsites("urrg");
 
-profile on;
 nam_file = nwpdata.download("data", "nam", baro_inventory.nam_12km, date, forecast);
 
 [nam_surface, nam_raster, nam_meta] = nwpdata.read(nam_file, fields = ["HGT", "TMP"], ...
@@ -23,8 +22,7 @@ urrg_nam_data = nam_atmos.sample3(hours(0), urrg.lat, urrg.lon);
 figure(name = "Air column at selected point");
 tiledlayout(1,4)
 
-H = urrg_nam_data.pick(field = "HGT");
-profile viewer;
+H = urrg_nam_data.pick(field = "HGT").squeeze;
 
 [isa_T, ~, isa_P, isa_rho] = atmosisa(double(H));
 
@@ -70,7 +68,7 @@ sgtitle(sprintf("Atmospheric profile at %s\n%s", ...
 % Wind infomation
 figure(name = "Terrain and wind grid");
 [x, y] = ndgrid(nam_surface.x, nam_surface.y);
-z_0 = nam_surface.pick(field = "HGT").permute(["x", "y"]).double;
+z_0 = nam_surface.pick(field = "HGT").squeeze.permute(["x", "y"]).double;
 
 surf(x, y, z_0, ...
     EdgeColor = "none");
@@ -83,7 +81,7 @@ windinfo = nam_atmos.data;
 windinfo = windinfo.pick(field = ["UGRD", "VGRD", "HGT"]) ...
     .range(pressure = [70e3 Inf]) ...
     .index(x = 1:2:size(windinfo, "x"), y = 1:2:size(windinfo, "y")) ...
-    .permute(["x", "y", "pressure", "field"]);
+        .squeeze.permute(["x", "y", "pressure", "field"]);
 
 [x, y, ~] = ndgrid(windinfo.x, windinfo.y, windinfo.pressure);
 quiver3(x, y, windinfo.pick(field = "HGT").double, ...
@@ -122,7 +120,7 @@ windinfo = gfs_atmos.data;
 windinfo = windinfo.pick(field = ["UGRD", "VGRD", "HGT"]) ...
     .range(pressure = [40e3 Inf]) ...
     .index(lat = 1:2:size(windinfo, "lat"), lon = 1:2:size(windinfo, "lon")) ...
-    .permute(["lat", "lon", "pressure", "field"]);
+    .squeeze.permute(["lat", "lon", "pressure", "field"]);
 windinfo = windinfo.index(pressure = mod(windinfo.pressure, 20e3) == 0); % can't decimate until the .range on pressure change has applied
 
 [lat, lon] = ndgrid(windinfo.lat, windinfo.lon);

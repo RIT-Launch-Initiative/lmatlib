@@ -39,6 +39,7 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
 
             if nargin == 0
                 obj.data = [];
+                return;
             end
             
             if ~isscalar(axes{1}) && iscell(coordinates{1})
@@ -72,7 +73,7 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
         end
 
         function dbl = double(obj)
-            dbl = obj.data;
+            dbl = double(obj.data);
         end
 
         function nax = naxes(obj)
@@ -116,7 +117,7 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
 
             % process input arguments
             if isnumeric(dim)
-                if dim > ndims(template)
+                if dim > naxes(template)
                     error("Concatenation dimension %d too large (%d-D)." + ...
                         " To create a new dimension, specify the new axis as a string scalar")
                 end
@@ -125,14 +126,14 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
                 dim = find(template.axes == name);
 
                 if isempty(dim)
-                    dim = ndims(template) + 1;
+                    dim = naxes(template) + 1;
                 end
             end
             
-            to_compare = 1:ndims(template);
+            to_compare = 1:naxes(template);
 
             % create new coordinate axis
-            if dim <= ndims(template) % existing dimension
+            if dim <= naxes(template) % existing dimension
                 new_axes = template.axes;
                 coords = cellfun(@(arry) arry.coordinates{dim}, ...
                     arrays, UniformOutput = false);
@@ -164,9 +165,9 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
 
             dimorder = obj.convertdims(order);
 
-            if length(dimorder) ~= ndims(obj)
+            if length(dimorder) ~= naxes(obj)
                 error("Dimension order must have exactly one entry per axis:\n%s" + ...
-                    "\nTo create singleton dimensions for broadcasting operations, assign 1-element axes.", ...
+                    "\nTo create singleton dimensions for broadcasting, assign 1-element axes.", ...
                     mat2str(obj.axes));
             end
             if issorted(dimorder)
@@ -204,7 +205,7 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
             end
 
             dims = obj.convertdims(axes{:});
-            ops = repmat({':'}, 1, ndims(obj));
+            ops = repmat({':'}, 1, naxes(obj));
 
             for i_ax = 1:length(axes)
                 [~, ops{dims(i_ax)}] = ismember(values{i_ax}, obj.(axes{i_ax}));
@@ -230,7 +231,7 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
                 ranges (1, 2);
             end
             
-            ops = repmat({':'}, 1, ndims(obj));
+            ops = repmat({':'}, 1, naxes(obj));
             dims = obj.convertdims(axes{:});
 
             for i_ax = 1:length(axes)
@@ -257,7 +258,7 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
                 ranges (1, 2);
             end
 
-            ops = repmat({':'}, 1, ndims(obj));
+            ops = repmat({':'}, 1, naxes(obj));
             dims = obj.convertdims(axes{:});
 
             for i_ax = 1:length(axes)
@@ -283,7 +284,7 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
                 indices (1, :);
             end
 
-            ops = repmat({':'}, 1, ndims(obj));
+            ops = repmat({':'}, 1, naxes(obj));
             dims = obj.convertdims(axes{:});
 
             for i_ax = 1:length(axes)
@@ -357,10 +358,10 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
         end
 
         function indexcheck(obj, op)
-            if length(op.Indices) ~= ndims(obj)
+            if length(op.Indices) ~= naxes(obj)
                 mex = MException("xarray:indexing", ...
                     "Expected %d subscripts but got %d", ...
-                    ndims(obj), length(op.Indices));
+                    naxes(obj), length(op.Indices));
                 throwAsCaller(mex);
             end
         end
@@ -395,7 +396,7 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
             indexcheck(obj, op);
 
             % Test sub-object coordinates for equality
-            for i_axis = 1:ndims(obj)
+            for i_axis = 1:naxes(obj)
                 coord = obj.coordinates{i_axis};
                 if ~isequal(coord(op.Indices{i_axis}), subobj.coordinates{i_axis})
                     error("Unable to assign sub-array: mismatch along %s", ...
@@ -415,7 +416,7 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
             op = operations(1);
             indexcheck(obj, op);
 
-            for i_axis = 1:ndims(obj)
+            for i_axis = 1:naxes(obj)
                 obj.coordinates{i_axis}(op.Indices{i_axis}) = [];
             end
 
@@ -574,12 +575,14 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
                 % operate on xarray and double (in either order)
                 if first_isx
                     obj = first;
+                    old_sz = size(obj.data);
+                    obj.data = func(obj.data, second);
                 elseif second_isx
                     obj = second;
+                    old_sz = size(obj.data);
+                    obj.data = func(first, obj.data);
                 end
 
-                old_sz = size(obj.data);
-                obj.data = func(double(first), double(second));
                 if ~isequal(size(obj.data), old_sz)
                     mex = MException("xarray:arithmetic", ...
                         "The arithmetic operation expanded the object from %s to %s." + ...
@@ -633,7 +636,7 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
         function obj = sort(obj, dims, varargin)
             dims = obj.convertdims(dims);
 
-            ops = repmat({':'}, 1, ndims(obj));
+            ops = repmat({':'}, 1, naxes(obj));
             for i_dim = 1:length(dims)
                 dim = dims(i_dim);
                 [~, ops{dim}] = sort(obj.coordinates{dim}, varargin{:});
@@ -644,7 +647,7 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
         % function fun = interpolant(obj, dims, varargin)
         %     terp_dims = obj.convertdims(dims);
         %     terp_names = obj.axes(terp_dims);
-        %     preserve_dims = 1:ndims(obj);
+        %     preserve_dims = 1:naxes(obj);
         %     preserve_dims(terp_dims) = [];
         %
         %     gridvectors = obj.coordinates(terp_dims);
