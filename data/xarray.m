@@ -1,31 +1,5 @@
 %% Array with named coordinate variables
 % Barebones MATLAB implementation of python-xarray
-% 
-% EXAMPLES:
-% % Create arrays
-% xarr = xarray(randi(100, 10, 50, 3), ...
-%     time = seconds(1:10), x = linspace(0, 10, 50), ...
-%     name = ["first", "second", "third"])
-% another_xarr = xarray(randi(100, 100, 50, 3), ...
-%     time = seconds(11:110), x = linspace(0, 10, 50), ...
-%     name = ["first", "second", "third"]) 
-% % Join arrays by axis name
-% xarr = cat("time", xarr, another_xarr)
-% % Permute by name
-% xarr = permute(xarr, ["name", "x", "time"])
-% Select values by membership in range
-% xarr = xarr.range(x = [2 5]) 
-% % Select values by tolerance around value
-% xarr = xarr.pickt(time = [seconds(4), seconds(1)], x = [4 0.5]) % select by tolerance around value
-% Select subset by equality with specific value
-% % Chain selections
-% xarr = xarr.pick(name = "second") 
-% % Chain selections
-% another_xarr = another_xarr.range(x = [2 5]).pickt(time = [seconds(20) seconds(2)]) % chain selections
-
-% NOTE FOR DEVELOPERS
-% - orientation of <axes> and members of <coordinates> are deliberatly set to
-% use matlab's broadcasting rules for certain operations
 
 classdef xarray < matlab.mixin.indexing.RedefinesDot ...
         & matlab.mixin.indexing.RedefinesParen ...
@@ -50,10 +24,10 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
             %   data                double array
             %   axes ...            string array of axis names
             %   coordinates ...     cell array of coordinate variables
-            % 
-            % Length of coordinate variables must match size(data, n). Trailing
-            % singleton dimensions are permitted (intended for later
-            % concatenation)
+            %
+            % Coordinate variables must
+            %   - Be vectors
+            %   - Match the size of the data in that dimension
             arguments
                 data double;
             end
@@ -62,7 +36,10 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
                 axes (1, :) string;
                 coordinates (1, :);
             end
-            
+
+            if nargin == 0
+                obj.data = [];
+            end
             
             if ~isscalar(axes{1}) && iscell(coordinates{1})
                 axes = axes{1};
@@ -74,69 +51,46 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
                     length(axes), length(coordinates));
             end
 
-            obj.data = data;
-            obj.axes = string(axes);
-            obj.coordinates = coordinates;
-        end
-
-        function obj = set.data(obj, data)
-            data = squeeze(data);
-            if isvector(data) && size(data, 2) > 1
+            if isvector(data) && (size(data, 2) > 1)
                 data = data';
             end
+
+            nd = ndims(data);
+            if (nd == 2) && (size(data, 2) == 1)
+                nd = 1;
+            end
+
+            if length(axes) < nd
+                error("At least %d axes required but %d specified", ...
+                    nd, length(axes))
+            end
+
             obj.data = data;
-        end
-
-        function obj = set.axes(obj, axes)
-            err_id = "xarray:invalidAxes";
-            if length(axes) ~= ndims(obj)
-                throwAsCaller(MException( err_id, ...
-                    "%d axes required, %d specified", ...
-                    ndims(obj), length(axes)));
+            for i_axis = 1:length(axes)
+                obj.(axes{i_axis}) = coordinates{i_axis};
             end
-
-            obj.axes = axes;
-        end
-
-        function obj = set.coordinates(obj, coords)
-            err_id = "xarray:invalidAxes";
-            if ndims(obj) ~= length(coords)
-                throwAsCaller(MException( err_id, ...
-                    "%d coordinates required, %d specified", ...
-                    ndims(obj), length(coords) ));
-            end
-            for i = 1:length(coords)
-                if ~isvector(coords{i})
-                    throwAsCaller(MException( err_id, ...
-                        "Coordinate %s is not a vector", i ));
-                end
-                if length(coords{i}) ~= size(obj, i)
-                    throwAsCaller(MException( err_id, ...
-                        "Coordinate %d are length %d, but data has size %d", ...
-                        i, length(coords{i}), size(obj, i) ));
-                end
-                % always transpose row to column
-                if size(coords{i}, 2) > 1
-                    coords{i} = coords{i}';
-                end
-            end
-
-            obj.coordinates = coords;
         end
 
         function dbl = double(obj)
             dbl = obj.data;
         end
 
-        function nd = ndims(obj)
-            nd = ndims(obj.data);
-            if size(obj.data, 2) == 1
-                nd = 1;
-            end
+        function nax = naxes(obj)
+            nax = length(obj.axes);
         end
 
         function varargout = size(obj, varargin)
-            if isempty(varargin)
+            % Get the xarray's size by name or number
+            % sz = size(xarr)
+            %   get size along all dimensions
+            % sz = size(xarr, [dim1, dim2, ...])
+            % sz = size(xarr, dim1, dim2, ...)
+            %   dim1...N can be strings or numbers, but must all be the same
+            % 
+            % Outputs can be produced in one vector or split into several
+            % sz = size(xarr, __)
+            % [sz1, sz2, ...] = size(xarr, __)
+            if nargin == 1
                 [varargout{1:nargout}] = size(obj.data);
             else
                 dims = obj.convertdims(varargin{:});
@@ -164,7 +118,7 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
             if isnumeric(dim)
                 if dim > ndims(template)
                     error("Concatenation dimension %d too large (%d-D)." + ...
-                        " To create a new dimension, specify the axis as a string scalar")
+                        " To create a new dimension, specify the new axis as a string scalar")
                 end
             else
                 name = dim;
@@ -179,11 +133,13 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
 
             % create new coordinate axis
             if dim <= ndims(template) % existing dimension
+                new_axes = template.axes;
                 coords = cellfun(@(arry) arry.coordinates{dim}, ...
                     arrays, UniformOutput = false);
                 coords = vertcat(coords{:});
                 to_compare(dim) = [];
             else % new dimension defaults to 1:n
+                new_axes = [template.axes name];
                 coords = 1:length(arrays);
             end
 
@@ -196,6 +152,7 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
 
             datas = cellfun(@(arry) arry.data, arrays, UniformOutput = false);
             template.data = cat(dim, datas{:});
+            template.axes = new_axes;
             template.coordinates{dim} = coords;
             obj = template;
         end
@@ -208,7 +165,8 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
             dimorder = obj.convertdims(order);
 
             if length(dimorder) ~= ndims(obj)
-                error("Dimension order must have exactly one entry per axis:\n%s", ...
+                error("Dimension order must have exactly one entry per axis:\n%s" + ...
+                    "\nTo create singleton dimensions for broadcasting operations, assign 1-element axes.", ...
                     mat2str(obj.axes));
             end
             if issorted(dimorder)
@@ -221,7 +179,18 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
             obj.coordinates = obj.coordinates(dimorder);
         end
 
-        function obj = pick(obj, axes, values)
+        function obj = squeeze(obj)
+            lengths = cellfun(@length, obj.coordinates);
+            scalars = lengths == 1;
+            obj.data = squeeze(obj.data);
+            if isvector(obj.data) && (size(obj.data, 2) > 1)
+                obj.data = obj.data';
+            end
+            obj.axes(scalars) = [];
+            obj.coordinates(scalars) = [];
+        end
+
+        function [obj, indices] = pick(obj, axes, values)
             % Index by exact equality, according to ismember(<values>, <coord>)
             % Returns values in the order specified by <values>
             % xarr.pick(axis = "value", ...)
@@ -245,9 +214,12 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
             end
 
             obj = obj(ops{:});
+            if nargout == 2
+                indices = ops;
+            end
         end
 
-        function obj = pickt(obj, axes, ranges)
+        function [obj, indices] = pickt(obj, axes, ranges)
             % Index by equality with tolerance
             % xarr.range(axis = [center tol])
             arguments
@@ -268,9 +240,12 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
             end
 
             obj = obj(ops{:});
+            if nargout == 2
+                indices = ops;
+            end
         end
 
-        function obj = range(obj, axes, ranges)
+        function [obj, indices] = range(obj, axes, ranges)
             % Index by range membership, according to min(rng) <= coord & coord <= max(rng)
             % xarr.range(axis = [lower, upper])
             %   [upper, lower] also works, and either can be +/- Inf
@@ -291,10 +266,13 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
             end
 
             obj = obj(ops{:});
+            if nargout == 2
+                indices = ops;
+            end
         end
 
 
-        function obj = index(obj, axes, indices)
+        function [obj, indices] = index(obj, axes, indices)
             % Index by logical or ordinal index
             % xarr.index(axis = [indices...])
             arguments
@@ -313,25 +291,36 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
             end
 
             obj = obj(ops{:});
+            if nargout == 2
+                indices = ops;
+            end
+        end
+
+        function obj = newaxis(obj, name, value)
+            arguments
+                obj xarray;
+                name (1,1) string;
+                value (1,1) 
+            end
+    
+            obj.axes(end+1) = name;
+            obj.coordinates{end+1} = value;
         end
 
         function obj = rename(obj, old, new)
+            % Rename xarray axis
+            % xarr = xarr.rename(old, new)
+            %   old     number or name of old axis
+            %   new     name of new axis
             arguments
                 obj xarray;
                 old (1,1) {mustBeA(old, ["numeric", "string"])};
                 new (1,1) string;
             end
-            % Rename xarray axis
-            % xarr = xarr.rename(old, new)
-            %   old     number or name of old axis
-            %   new     name of new axis
+
             old = obj.convertdims(old);
             obj.axes(old) = new;
         end
-    end
-
-
-    methods (Access = public)
     end
 
     methods (Access = protected)
@@ -383,17 +372,13 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
             indexcheck(obj, op);
 
             % Index into data using all indices, index into each axis using its index
-            new_data = obj.data.(op);
-            sizes = size(new_data);
-            nonscalar = sizes ~= 1;
-            obj.data = new_data;
-            obj.axes = obj.axes(nonscalar);
+            obj.data = obj.data.(op);
 
             new_coords = cell(1, length(obj.coordinates));
             for i_axis = 1:length(obj.coordinates)
                 new_coords{i_axis} = obj.coordinates{i_axis}(op.Indices{i_axis});
             end
-            obj.coordinates = new_coords(nonscalar);
+            obj.coordinates = new_coords;
 
             % Perform subsequent operations (if any)
             if ~isscalar(operations)
@@ -413,7 +398,8 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
             for i_axis = 1:ndims(obj)
                 coord = obj.coordinates{i_axis};
                 if ~isequal(coord(op.Indices{i_axis}), subobj.coordinates{i_axis})
-                    error("Unable to assign sub-array: mismatch along %s", obj.names(i_axis));
+                    error("Unable to assign sub-array: mismatch along %s", ...
+                        obj.names(i_axis));
                 end
             end
 
@@ -451,7 +437,12 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
         end
         
         function obj = braceAssign(obj, op, data)
+            old_sz = size(obj.data);
             obj.data(op.Indices{:}) = data;
+            if ~isequal(size(obj.data), old_sz)
+                error("Brace assignment changed xarray size from %d to %d", ...
+                    old_sz, size(obj.data));
+            end
         end
 
         function n = braceListLength(~, ~, ~)
@@ -473,12 +464,39 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
         function obj = dotAssign(obj, operations, input)
             op = operations(1);
             axis = op.Name;
-            axis_idx = convertdims(obj, axis);
+            dim = find(axis == obj.axes, 1);
 
-            if isscalar(operations)
-                obj.coordinates{axis_idx} = input;
-            elseif length(operations) == 2
-                obj.coordinates{axis_idx}.(operations(2)) = input;
+            if isempty(dim) % new axis
+                if ~isscalar(operations)
+                    error("Invalid chained indexing while creating new axis");
+                end
+                if axis == ""
+                    error("New axis must have non-empty name");
+                end
+                dim = length(obj.axes) + 1;
+                obj.axes(dim) = axis;
+                obj.coordinates{dim} = input;
+            else % assign new values to existing axis
+                if isscalar(operations)
+                    obj.coordinates{dim} = input;
+                elseif length(operations) == 2
+                    obj.coordinates{dim}.(operations(2)) = input;
+                end
+            end
+            
+            % Validate newly assigned coordinates
+            if ~isvector(obj.coordinates{dim})
+                error("Coordinate variables must be vectors");
+            end
+
+            if length(obj.coordinates{dim}) ~= size(obj.data, dim)
+                error("Mismatched axes: size(xarr, %d) = %d but coordinate has length %d", ...
+                    dim, size(obj.data, dim), obj.coordinates{dim});
+            end
+
+            % Silently enforce column-vector coordinate variables by transposing row
+            if size(obj.coordinates{dim}, 2) > 1
+                obj.coordinates{dim} = obj.coordinates{dim}';
             end
         end
 
@@ -496,7 +514,6 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
 
         function group = getPropertyGroups(obj)
             prop_list = [cellstr(obj.axes); 
-                % obj.coordinates];
                 cellfun(@(c) c', obj.coordinates, UniformOutput = false)];
             prop_list = struct(prop_list{:});
             group = matlab.mixin.util.PropertyGroup(prop_list);
@@ -561,14 +578,14 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
                     obj = second;
                 end
 
-                old_nd = ndims(obj);
+                old_sz = size(obj.data);
                 obj.data = func(double(first), double(second));
-                
-                if ndims(obj) > old_nd
+                if ~isequal(size(obj.data), old_sz)
                     mex = MException("xarray:arithmetic", ...
-                        "The arithmetic operation expanded the object to %d dimensions." + ...
+                        "The arithmetic operation expanded the object from %s to %s." + ...
                         " To create new dimensions by broadcasting element-wise operations," + ...
-                        " Create an <xarray> instance to define the new axes.", ndims(obj));
+                        " Create an <xarray> instance to define the new axes.", ...
+                        mat2str(old_sz), mat2str(size(obj.data)));
                     throwAsCaller(mex);
                 end
             end
