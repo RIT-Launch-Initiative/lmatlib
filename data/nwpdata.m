@@ -8,7 +8,177 @@
 % Planned support
 % - <a href="https://www.nco.ncep.noaa.gov/pmb/products/gens/">GEFS (0.50, 0.25-deg)</a>
 
-classdef (Abstract) nwpdata 
+classdef nwpdata 
+
+
+    properties (GetAccess = public, SetAccess = protected)
+        % member (1,1) {mustBeA(member, ["string", "numeric"])};
+        model_name (1,1) string;
+        product_name (1,1) string;
+        file (1,1) string = missing;
+    end
+
+    properties (Dependent)
+        time (1,1) datetime;
+        inventory table;
+    end
+
+    properties (Hidden)
+        model_id (1,1) string = missing;
+        product (1,1) string = missing;
+        cycle (1,1) datetime = missing;
+        forecast (1,:) duration = missing;
+        url (1,1) string = missing;
+        info (1,1) map.io.RasterInfo = missing;
+    end
+    
+    properties (Constant, Access = protected)
+        defs dictionary = nwpdata.data_definitions;
+    end
+
+    methods
+        function obj = nwpdata(model, grid, cycle, forecasts)
+            arguments
+                model (1,1) string;
+                grid (1,1) string;
+                cycle (1,1) datetime;
+                forecasts (1,:) duration;
+            end 
+
+            mustBeMember(model, nwpdata.defs.keys);
+            obj.model_id = model;
+            obj.model_name = nwpdata.defs{model}{"name"};
+
+            products = nwpdata.defs{model}{"products"};
+            mustBeMember(grid, products.keys);
+            obj.product = products{grid}{"product"};
+            obj.product_name = products{grid}{"name"};
+            
+            cycle.TimeZone = "UTC";
+            cycle_time = cycle - dateshift(cycle, "start", "day");
+            if ~ismember(cycle_time, products{grid}{"cycle_values"})
+                error("Invalid model cycle %s: %s-%s is produced %s", ...
+                    cycle, model, grid, products{grid}{"cycle_hint"});
+            end
+            obj.cycle = cycle;
+
+            invalid = setdiff(forecasts, products{grid}{"forecast_values"});
+            if ~isempty(invalid)
+                error("Invalid model forecasts(s) %s: %s-%s is produced %s", ...
+                    mat2str(string(invalid)), model, grid, products{grid}{"forecast_hint"});
+            end
+            obj.forecast = forecasts;
+        end
+
+        % function files = download(obj, folder)
+        %     
+        % end
+        %
+        % function output = read(obj, params)
+        %     
+        % end
+
+        function time = get.time(obj)
+            time = obj.cycle + obj.forecast;
+            % fcst_text = string(obj.cycle, sprintf("(dd-MMM-yyyy HH z'+%g')", hours(obj.forecast)));
+            % time.Format = "dd-MMM-yyyy HHz" + "'" + fcst_text + "'";
+        end
+
+        function inv = get.inventory(obj)
+            if ismissing(obj.info)
+                inv = missing;
+            else
+                inv = obj.info.Metadata;
+            end
+        end
+    end
+    methods (Static)
+
+        function defs = data_definitions
+            model_template = configureDictionary("string", "cell");
+            model_template{"products"} = missing;
+            model_template{"filename"} = missing;
+            model_template{"url"} = missing;
+
+
+            product_template = configureDictionary("string", "cell");
+            product_template{"product"} = missing;
+            product_template{"name"} = missing;
+            product_template{"grid_type"} = missing; % must be "geographic" or "planar"
+            product_template{"cycle_values"} = [hours(0) hours(6) hours(12) hours(18)];
+            product_template{"cycle_hint"} = "6-hourly at 00:00, 06:00, 12:00, 18:00";
+            product_template{"forecast_values"} = NaT;
+            product_template{"forecast_hint"} = NaT;
+            % product_template{"member_values"} = NaN;
+            % product_template{"member_hint"} = "Not an ensemble forecast";
+
+            % GFS definitions
+            onedeg = product_template;
+            onedeg{"product"} = "pgrb2.1p00";
+            onedeg{"name"} = "1.00 deg global latitude/longitude";
+            onedeg{"grid_type"} = "geographic";
+            onedeg{"forecast_values"} = hours(0:3:384);
+            onedeg{"forecast_hint"} = "3-hourly up to 384 hours";
+
+            halfdeg = onedeg;
+            halfdeg{"product"} = "pgrb2.0p50";
+            halfdeg{"name"} = "0.50 deg global latitude/longitude";
+
+            quartdeg = onedeg;
+            quartdeg{"name"} = "0.25 deg global latitude/longitude";
+            quartdeg{"forecast_values"} = hours(0:1:384);
+            quartdeg{"forecast_hint"} = "hourly up to 384 hours";
+
+            gfs_products = dictionary(["1.00 deg", "0.50 deg", "0.25 deg"], {onedeg, halfdeg, quartdeg});
+
+            gfs = dictionary;
+            gfs{"products"} = gfs_products;
+            gfs{"name"} = "Global Forecast System";
+            gfs{"filename"} = "gfs.t<CC>z.<PRODUCT>.f<FFF>";
+            gfs{"url"} = "https://noaa-gfs-bdp-pds.s3.amazonaws.com/gfs.<YYYY><MM><DD>/<CC>/atmos";
+
+            % NAM definitions
+            twelve = product_template;
+
+            twelve{"product"} = "awphys";
+            twelve{"name"} = " 12-km continental U.S. Lambert projected";
+            twelve{"grid_type"} = "planar";
+            twelve{"forecast_values"} = hours(0:1:84);
+            twelve{"forecast_hint"} = "hourly up to 84 hours";
+
+            three = product_template;
+            three{"product"} = "conusnest.hiresf";
+            three{"name"} = "3-km contiguous U.S. Lambert projected grid";
+            three{"grid_type"} = "planar";
+            three{"forecast_values"} = hours(0:1:60);
+            three{"forecast_hint"} = "hourly up to 60 hours";
+
+            nam = model_template;
+            nam{"products"} = dictionary(["12 km", "3 km"], {twelve three});
+            nam{"name"} = "North American Mesoscale";
+            nam{"filename"} = "nam.t<CC>z.<PRODUCT><FF>.tm00.grib2";
+            nam{"url"} = "https://noaa-nam-pds.s3.amazonaws.com/nam.<YYYY><MM><DD>";
+
+            % HRRR definitions
+            hrrr_product = product_template;
+            hrrr_product{"product"} = "conusnest.hiresf";
+            hrrr_product{"name"} = "3-km contiguous U.S. Lambert projected grid";
+            hrrr_product{"grid_type"} = "planar";
+            hrrr_product{"forecast_values"} = hours(0:1:60);
+            hrrr_product{"forecast_hint"} = "hourly up to 48 hours";
+            hrrr_product{"cycle_values"} = hours(0:1:23);
+            hrrr_product{"cycle_hint"} = "hourly";
+
+            hrrr = model_template;
+            hrrr{"product"} = dictionary("3 km", hrrr_product);
+            hrrr{"name"} = "High-Resolution Rapid Refresh";
+            hrrr{"filename"} = "hrrr.t<CC>z.<PRODUCT><FF>.grib2";
+            hrrr{"url"} = "https://noaa-hrrr-bdp-pds.s3.amazonaws.com/hrrr.<YYYY><MM><DD>/conus";
+
+            defs = dictionary(["gfs", "nam", "hrrr"], {gfs, nam, hrrr}); 
+        end
+    end
+
 %% PUBLIC OBJECT METHODS
     methods (Static)
         function [data, raster, metadata] = read(path, params)
@@ -146,19 +316,23 @@ classdef (Abstract) nwpdata
             url = fullfile(folder, filename);
         end
 
-        % function str = sprintn(str, name, rep)
-        %     arguments
-        %         str (:, 1) string;
-        %     end
-        %     arguments (Repeating)
-        %         name (1, 1) string;
-        %         rep (:, 1) string;
-        %     end
-        %
-        %     for i = 1:length(name)
-        %         str = strrep(str, "<" + name{i} + ">", rep);
-        %     end
-        % end
+        function str = populate(str, name, rep)
+            arguments
+                str (:, 1) string;
+            end
+            arguments (Repeating)
+                name (1, 1) string;
+                rep (:, 1) string;
+            end
+
+            for i = 1:length(name)
+                if isnumeric(rep{i})
+                    fmt = sprintf("%%0%dd", strlength(name{i}));
+                    rep{i} = compose(fmt, rep{i});
+                end
+                str = strrep(str, "<" + name{i} + ">", rep{i});
+            end
+        end
 
         function files = download(dest, model, product, date, forecast)
             arguments
