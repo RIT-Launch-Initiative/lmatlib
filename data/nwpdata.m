@@ -1,12 +1,12 @@
 % Create and process NOAA's Numerical Weather Prediction data products
-% Requires Mapping Toolbox for READGEORASTER
+% Requires Mapping Toolbox for reading and processing georeferenced rasters
 % 
-% Desired functionality
-% - Read data geographically limited by (lat, lon)
-% - 
-
-% Methods of indexing:
-% 
+% Currently supported output products
+% - <a href="https://www.nco.ncep.noaa.gov/pmb/products/gfs/">GFS (1.00, 0.50, 0.25-deg) pressure fields</a>
+% - <a href="https://www.nco.ncep.noaa.gov/pmb/products/nam/">NAM (12, 3-km) pressure fields</a>
+% - <a href="https://www.nco.ncep.noaa.gov/pmb/products/hrrr/">HRRR (3-km) pressure fields</a>
+% Planned support
+% - <a href="https://www.nco.ncep.noaa.gov/pmb/products/gens/">GEFS (0.50, 0.25-deg)</a>
 
 classdef (Abstract) nwpdata 
 %% PUBLIC OBJECT METHODS
@@ -19,24 +19,22 @@ classdef (Abstract) nwpdata
             %   
             %   Required name-value arguments
             %   fields      List of data fields (TMP, HGT, ...)
+            %               May be regex
             %   layers      List of data layers (0-SFC, 100000-ISBL, EATM)
+            %               May be regex
             %   
-            %   Optional name-value arguments are used to crop the read data to
-            %   a square to save memory. For planar projected maps, lat and lon
-            %   are projected onto the map to get y/x limits. For geographic
-            %   maps, side() is converted to angle limits using the Earth's
-            %   radius, and the mean of the latitude limits is used to find the
-            %   angle limits in longitude
-            %   lat         Latitude enter of crop
-            %   lon         Longitude of center of crop
-            %   side        Side length of square used to crop
+            %   Optional name-value arguments
+            %   lats        Latitude limits 
+            %               default [-Inf Inf]
+            %   lons        Longitude limits 
+            %               default [-Inf Inf]
             %   
             %   OUTPUTS
             %   data        xarray with dimensions (y/x or lat/lon, layer, field)
             %   raster      Location referencing object
             %   metadata    Table containing information about layers and fields
             arguments
-                path (1,1) string {mustBeFile};
+                path (1,1) {mustBeFile}
                 params.fields (1,:) string;
                 params.layers (1,:) string;
 
@@ -54,37 +52,54 @@ classdef (Abstract) nwpdata
 
             metadata = info.Metadata;
             all_bands = nwpdata.find_bands(metadata, fields, layers);
-            all_layers = metadata.ShortName(all_bands);
-            layer_template = unique(all_layers);
-            data_array = cell(1, length(fields));
+            output_fields = unique(metadata.Element(all_bands));
+            output_layers = unique(metadata.ShortName(all_bands));
 
-            for i_field = 1:length(fields)
-                field = fields(i_field);
-                bands = nwpdata.find_bands(metadata, field, layers);
-                layers = metadata.ShortName(bands);
+            nrows = length(axes{2});
+            ncols = length(axes{4});
+            nfields = length(output_fields);
+            nlayers = length(output_layers);
 
-                if length(layers) ~= length(layer_template)
-                    error("Missing data for field %s at %s", field, ...
-                        mat2str(setdiff(layer_template, layers)));
+            % Allocate output
+            data = xarray(NaN(nrows, ncols, nlayers, nfields), ...
+                axes{:}, layer = output_layers, field = output_fields);
+
+            for i_layer = 1:nlayers
+                layer = output_layers(i_layer);
+                bands = nwpdata.find_bands(metadata, output_fields, layer);
+                fields = metadata.Element(bands);
+
+                if length(bands) < length(output_fields)
+                    warning("Missing %s at layer %s", ...
+                        layer, mat2str(setdiff(output_fields, fields)));
                 end
 
-                [field_data, ~] = readgeoraster(path, Bands = bands);
-                [~, ~, order] = intersect(layer_template, layers, "stable");
-                data_array{i_field} = field_data(indices{:}, order);
+                [~, field_order] = ismember(fields, output_fields);
+                layer_data = readgeoraster(info.Filename, Bands = bands);
+                data{:, :, i_layer, field_order} = permute(layer_data(indices{:}, :), [1 2 4 3]);
             end
 
             time = metadata.ValidTime(1);
             time.TimeZone = "UTC";
-
-            axes = [axes {"layer", layer_template, "field", fields, "time", time}];
-            data = xarray(cat(4, data_array{:}), axes{:});
+            data.time = time;
 
             if nargout == 3
-                metadata = metadata(all_bands, ["ShortName", "Element", "Unit", "Comment"]);
-                metadata = convertvars(metadata, ["ShortName", "Element"], "categorical");
+                metadata = metadata(all_bands);
             end
         end
-        
+
+        % function data = read_internal(info, fields, layers)
+        %     arguments
+        %         info map.io.RasterInfo
+        %         fields (1, :) string;
+        %         layers (1, :) string;
+        %     end 
+        %
+        %     metadata = info.Metadata;
+        %     bands = nwpdata.find_bands(metadata, fields, layers);
+        %     layers = unique(metadata.ShortName(bands));
+        % end
+
         function [filename, url] = filename(model, product, date, forecast)
             arguments
                 model (1,1) string {mustBeMember(model, ["nam", "gfs", "hrrr"])};
@@ -121,7 +136,6 @@ classdef (Abstract) nwpdata
                     folder = "https://noaa-hrrr-bdp-pds.s3.amazonaws.com/hrrr.<YYYY><MM><DD>/conus";
             end
 
-
             keys = reps.keys;
             for i = 1:length(keys)
                 key = keys(i);
@@ -131,6 +145,20 @@ classdef (Abstract) nwpdata
             end
             url = fullfile(folder, filename);
         end
+
+        % function str = sprintn(str, name, rep)
+        %     arguments
+        %         str (:, 1) string;
+        %     end
+        %     arguments (Repeating)
+        %         name (1, 1) string;
+        %         rep (:, 1) string;
+        %     end
+        %
+        %     for i = 1:length(name)
+        %         str = strrep(str, "<" + name{i} + ">", rep);
+        %     end
+        % end
 
         function files = download(dest, model, product, date, forecast)
             arguments
@@ -152,6 +180,26 @@ classdef (Abstract) nwpdata
             files = bulk_download(dest, url, filename);
         end
 
+        function coords = latlon2raster(raster, lat, lon)
+            % Project geographic coordiantes onto the raster's coordinate system
+            arguments
+                raster
+                lat double;
+                lon double;
+            end
+
+            type = raster.CoordinateSystemType;
+            
+            switch type
+                case "planar"
+                    [coords.x, coords.y] = projfwd(raster.ProjectedCRS, lat, lon);
+                case "geographic"
+                    coords.lat = lat;
+                    coords.lon = lon;
+                otherwise
+                    error("Unrecognized coordinate system type '%s'", raster_type);
+            end
+        end
     end
 
 %% INTERNAL UTILITIES

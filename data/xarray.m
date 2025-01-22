@@ -73,7 +73,7 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
         end
 
         function dbl = double(obj)
-            dbl = double(obj.data);
+            dbl = squeeze(obj.data);
         end
 
         function nax = naxes(obj)
@@ -180,6 +180,15 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
             obj.coordinates = obj.coordinates(dimorder);
         end
 
+        function obj = leading(obj, order)
+            % Turn specified dimensions into leading dimensions
+            leading_order = obj.convertdims(order)';
+            trailing_order = 1:naxes(obj);
+            trailing_order(leading_order) = [];
+
+            obj = permute(obj, [leading_order trailing_order]);
+        end
+
         function obj = squeeze(obj)
             lengths = cellfun(@length, obj.coordinates);
             scalars = lengths == 1;
@@ -189,6 +198,25 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
             end
             obj.axes(scalars) = [];
             obj.coordinates(scalars) = [];
+        end
+
+        function obj = repmat(obj, axes, counts)
+            arguments
+                obj xarray;
+            end
+            arguments (Repeating)
+                axes (1,1) string;
+                counts (1,1) double {mustBeInteger};
+            end
+
+            axes = string(axes);
+            repdims = obj.convertdims(axes);
+            repcounts = ones(1, naxes(obj));
+            repcounts(repdims) = [counts{:}];
+            obj.data = repmat(obj.data, repcounts);
+            for i_rep = 1:length(repdims)
+                obj.coordinates{i_rep} = repmat(obj.coordinates{i_rep}, counts{i_rep}, 1);
+            end
         end
 
         function [obj, indices] = pick(obj, axes, values)
@@ -295,17 +323,6 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
             if nargout == 2
                 indices = ops;
             end
-        end
-
-        function obj = newaxis(obj, name, value)
-            arguments
-                obj xarray;
-                name (1,1) string;
-                value (1,1) 
-            end
-    
-            obj.axes(end+1) = name;
-            obj.coordinates{end+1} = value;
         end
 
         function obj = rename(obj, old, new)
@@ -531,16 +548,9 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
             
             if first_isx && second_isx 
                 % operate on two xarrays
-                % axes common to both are tested for exact equality and ordered as in the first
-                % axes only in the first are ordered as in the first
-                % axes only in the second are appended to the end
+                [order, common] = matchdims(first.axes, second.axes);
 
-                matches = first.axes' == second.axes; % relies on xarray.axes forced to be a row
-                % find axes in common
-                [common_from_fst, common_from_snd] = find(matches);
-                common_names = first.axes(common_from_fst);
-
-                iseq = dimequal(first, second, common_names);
+                iseq = dimequal(first, second, common);
                 if any(~iseq)
                     mex = MException("xarray:mismatch", ...
                         "Common axes %s are not equal", ...
@@ -548,24 +558,11 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
                     throwAsCaller(mex);
                 end
 
-                % create permutation vector
-                only_in_fst = find(~any(matches, 2));
-                only_in_snd = find(~any(matches, 1));
-                dims_total = size(matches, 1) + size(matches, 2) - length(common_names);
-                new_dims = (size(matches, 2)+1):dims_total;
-
-                permutation = NaN(1, size(matches, 1));
-                permutation(common_from_fst) = common_from_snd;
-                permutation(only_in_fst) = new_dims; %#ok
-                permutation = [permutation only_in_snd];
-
-                assert(all(isfinite(permutation)), "Some permutation dimensions not assigned");
-
-                if isscalar(permutation)
-                    permutation = [1 2];
+                if isscalar(order)
+                    order = [1 2];
                 end
                 second_data = double(second);
-                second_data = permute(second_data, permutation);
+                second_data = permute(second_data, order);
 
                 obj = first;
                 obj.data = func(obj.data, second_data);
@@ -592,6 +589,36 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
                     throwAsCaller(mex);
                 end
             end
+        end
+
+        function [order, common] = matchdims(first, second)
+            % [order, common] = matchdims(first, second)
+            % first, second (string)    axis names from first and second arguments
+            % axes common to both are tested for exact equality and ordered as in the first
+            % axes only in the first are ordered as in the first
+            % axes only in the second are appended to the end
+            arguments
+                first (1, :) string;
+                second (1, :) string;
+            end 
+
+            matches = first' == second; % relies on xarray.axes forced to be a row
+            % find axes in common
+            [common_from_fst, common_from_snd] = find(matches);
+            common = first.axes(common_from_fst);
+
+            only_in_fst = find(~any(matches, 2));
+            only_in_snd = find(~any(matches, 1));
+            dims_total = size(matches, 1) + size(matches, 2) - length(common);
+            new_dims = (size(matches, 2)+1):dims_total;
+
+            % create permutation vector
+            order = NaN(1, size(matches, 1));
+            order(common_from_fst) = common_from_snd;
+            order(only_in_fst) = new_dims; %#ok
+            order = [order only_in_snd];
+            
+            assert(all(isfinite(permutation)), "Some permutation dimensions not assigned");
         end
     end
 %
@@ -642,6 +669,99 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
                 [~, ops{dim}] = sort(obj.coordinates{dim}, varargin{:});
             end
             obj = obj(ops{:});
+        end
+
+        function result = interp(obj, method, axes, values)
+            % Interpolate over <xarray> dimensions
+            arguments
+                obj xarray;
+                method (1,1) string;
+            end
+
+            arguments (Repeating)
+                axes (1,1) string;
+                values (1,:) double;
+            end
+            
+            axes = string(axes);
+            [interpolant, obj] = create_data_interpolant(obj, axes, method);
+
+            result = interpolant(values{:});
+            new_axes = obj.axes;
+            new_coords = obj.coordinates;
+            new_coords(1:length(values)) = values;
+            result = xarray(result, new_axes, new_coords);
+        end
+
+        function interpfcn_h = interpolant(obj, axes, method, extrap)
+            arguments
+                obj xarray;
+                axes (1,:) string;
+                method (1,1) string = "linear";
+                extrap (1,1) string = method;
+            end
+
+            [terp, obj] = create_data_interpolant(obj, axes, method, extrap);
+            trailing_dims = (length(axes)+1):naxes(obj);
+            trailing_coords = obj.coordinates(trailing_dims);
+            % trailing_axes = obj.axes(trailing_dims);
+            %
+            % template_size = [ones(1, length(axes)), size(obj, trailing_dims)];
+            % template_axes = []
+            % template_coords = [repmat({1}, 1, length(axes)), obj.coordinates(trailing_dims)];
+            %
+            % lens = cellfun(@length, trailing_coords);
+            % template = xarray(NaN(lens), trailing_axes, trailing_coords);
+
+            interpfcn_h = @interpfcn;
+            function result = interpfcn(varargin)
+                if iscell(varargin{1})
+                    gridvectors = varargin{1};
+                else
+                    gridvectors = varargin;
+                end
+                if length(gridvectors) ~= length(axes)
+                    error("Expected %d grid vectors, %d specified", length(axes), length(gridvectors));
+                end
+                result = terp(gridvectors);
+                result = xarray(result, obj.axes, [gridvectors trailing_coords]);
+            end
+        end
+
+        function [interpolant, obj] = create_data_interpolant(obj, axes, method, extrap)
+            % Create data interpolant
+            % [interpolant, obj] = create_data_interpolant(obj, method, extrap, axes)
+            %       Performs input checks and sorts specified axes
+            arguments
+                obj xarray;
+                axes (1,:) string;
+                method (1,1) string;
+                extrap (1,1) string;
+            end
+            
+            interp_dims = obj.convertdims(axes);
+
+            err_id = "xarray:interpolate";
+            lengths = cellfun(@length, obj.coordinates(interp_dims));
+            scalars = axes(lengths == 1);
+            if ~isempty(scalars)
+                throwAsCaller(MException(err_id, "Dimension(s) %s are scalar." + ...
+                    " Interpolation is not supported along scalar dimensions.", ...
+                    mat2str(scalars)));
+            end
+
+            isnum = cellfun(@isnumeric, obj.coordinates(interp_dims));
+            nonnum = axes(~isnum);
+            if ~isempty(nonnum)
+                throwAsCaller(MException(err_id, "Dimension(s) %s are non-numeric." + ...
+                    " Interpolation is not supported along non-numeric dimensions.", ...
+                    mat2str(nonnum)));
+            end
+
+            obj = obj.sort(interp_dims, "ascend");
+            obj = obj.leading(interp_dims);
+            interp_vectors = obj.coordinates(1:length(axes));
+            interpolant = griddedInterpolant(interp_vectors, obj.data, method, extrap);
         end
 
         % function fun = interpolant(obj, dims, varargin)

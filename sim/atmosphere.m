@@ -52,18 +52,19 @@ classdef atmosphere
             data = permute(data, [obj.intrinsic_lat, obj.intrinsic_lon, "time", "pressure", "field"]);
             data = sort(data, [obj.intrinsic_lat, obj.intrinsic_lon, "time"], "ascend");
             obj.epoch = data.time(1);
-            data.time = seconds(data.time - obj.epoch);
+            obj.data = data;
+            obj.sample3_template = data.index(...
+                obj.intrinsic_lat, 1, obj.intrinsic_lon, 1, "time", 1).squeeze;
 
             if isscalar(data.time)
                 obj.interpolant = griddedInterpolant(data.coordinates(1:2), double(data), ...
                     "linear", "nearest");
             else
-                obj.interpolant = griddedInterpolant(data.coordinates(1:3), double(data), ...
+                coords = data.coordinates(1:3);
+                [~, ~, coords{3}] = obj.get_intrinsic(NaN, NaN, coords{3});
+                obj.interpolant = griddedInterpolant(coords, double(data), ...
                     "linear", "nearest");
             end
-            obj.data = data;
-            obj.sample3_template = data.index(...
-                obj.intrinsic_lat, 1, obj.intrinsic_lon, 1, "time", 1).squeeze;
         end
 
         function [int_lat, int_lon, int_time] = get_intrinsic(obj, lat, lon, time)
@@ -117,7 +118,11 @@ classdef atmosphere
             samp = sample3(obj, time, lat, lon);
 
             interp_data = [samp.pressure, samp.double];
-            result = interp1(samp.pick(field = "HGT").squeeze.double, interp_data, height);
+            interp_h = samp.pick(field = "HGT").squeeze.double;
+            if height < min(interp_h)
+                height = min(interp_h);
+            end
+            result = interp1(interp_h, interp_data, height, "linear");
             result = xarray(result, field = ["PRES"; samp.field]);
 
             present = ismember(fields, result.field);

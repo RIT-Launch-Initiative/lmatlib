@@ -46,7 +46,7 @@ ssm_launchrod = NaN(size(heights));
 ssm_reference = NaN(size(heights));
 ssm_burnout = NaN(size(heights));
 
-% Refernce flight condition
+% Reference flight condition
 ref_mach = 0.3;
 ref_aoa = deg2rad(5);
 ref_fcond = otis.flight_condition(ref_mach, ref_aoa);
@@ -63,7 +63,7 @@ for i = 1:length(heights)
     % Cut data to range of interest
     data_range = timerange(eventfilter("LAUNCHROD"), eventfilter("BURNOUT"), "openleft");
     data = data(data_range, :);
-    % We need to data point immediately after the LAUNCHROD event because
+    % ^ We need the data point immediately after the LAUNCHROD event because
     % OpenRocket only starts calculating stability margin after, not at, that
     % event. The "openleft" option for TIMERANGE cuts the table to include the
     % point immediately after the LAUNCHROD event. 
@@ -95,7 +95,7 @@ sim = otis.sims("15MPH-SA");
 opts = sim.getOptions();
 opts.setWindTurbulenceIntensity(0.15);
 opts.setLaunchRodDirection(deg2rad(60));
-opts.setTimeStep(0.05); % lower rate to improve performacne
+opts.setTimeStep(0.05); % lower rate to improve performance
 
 launch_angle = opts.getLaunchRodAngle();
 wind_speed = opts.getWindSpeedAverage();
@@ -146,10 +146,11 @@ title(sprintf("Stability mass optimized to %.2f kg", opt_weight));
 
 function func = make_cost_function(doc, sim, tuned_name)
     % All of these variables need to be pre-populated in the cost function, but
-    % can't be arguments They can be made global, or the cost function is
-    % nested within a function in which the variables are evaluated once.
+    % can't be arguments. The cost function needs to use them as global values
+    % (not recommended) or the cost function can be the return value of a
+    % function in which the variables are evaulated once.     
     % 
-    % https://www.mathworks.com/help/matlab/math/parameterizing-functions.html
+    % See https://www.mathworks.com/help/matlab/math/parameterizing-functions.html
 
     sim.getOptions().setWindTurbulenceIntensity(0);
 
