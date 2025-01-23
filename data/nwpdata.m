@@ -8,28 +8,25 @@
 % Planned support
 % - <a href="https://www.nco.ncep.noaa.gov/pmb/products/gens/">GEFS (0.50, 0.25-deg)</a>
 
-classdef nwpdata 
-
-
+classdef nwpdata < handle & matlab.mixin.CustomDisplay
     properties (GetAccess = public, SetAccess = protected)
-        % member (1,1) {mustBeA(member, ["string", "numeric"])};
-        model_name (1,1) string;
-        product_name (1,1) string;
-        file (1,1) string = missing;
+        model (1,1) string = missing;
+        product (1,1) string = missing;
+        cycle (1,1) datetime = NaT;
+        forecast (1,:) duration;
+        path (1,:) string;
+        info (1,:) map.io.RasterInfo;
     end
 
     properties (Dependent)
-        time (1,1) datetime;
-        inventory table;
+        crs {mustBeA(crs, ["geocrs", "projcrs"])};
     end
 
-    properties (Hidden)
+    properties (Access = protected)
         model_id (1,1) string = missing;
-        product (1,1) string = missing;
-        cycle (1,1) datetime = missing;
-        forecast (1,:) duration = missing;
-        url (1,1) string = missing;
-        info (1,1) map.io.RasterInfo = missing;
+        product_id (1,1) string = missing;
+        filename (1,:) string;
+        url (1,:) string;
     end
     
     properties (Constant, Access = protected)
@@ -38,322 +35,159 @@ classdef nwpdata
 
     methods
         function obj = nwpdata(model, grid, cycle, forecasts)
+            % ref = nwpdata(model, grid, cycle, forecasts)
+            %   model   (string)    NWP model 
+            %   grid    (string)    Data product
+            %   cycle   (datetime)  Model output cycle (usually hourly or 6-hourly, 00 UTC)
+            %   fcst    (duration)  Forecast extent (usually hourly or 3-hourly)
             arguments
                 model (1,1) string;
                 grid (1,1) string;
                 cycle (1,1) datetime;
-                forecasts (1,:) duration;
+                forecasts (1,:) duration {mustBeNonempty};
             end 
 
-            mustBeMember(model, nwpdata.defs.keys);
+            % Validate model
+            if ~ismember(model, nwpdata.defs.keys)
+                error("Model ""%s"" not recognized. Models supported: %s", ...
+                    model, nwpdata.defs.keys.join(", "));
+            end
             obj.model_id = model;
-            obj.model_name = nwpdata.defs{model}{"name"};
+            model = nwpdata.defs{model};
+            obj.model = model{"name"};
 
-            products = nwpdata.defs{model}{"products"};
-            mustBeMember(grid, products.keys);
-            obj.product = products{grid}{"product"};
-            obj.product_name = products{grid}{"name"};
+            % Validate product
+            if ~ismember(grid, model{"products"}.keys)
+                error("Grid ""%s"" not recognized. %s supports grids %s", ...
+                    grid, upper(obj.model_id), model{"products"}.keys.join(", "));
+            end
+            product = model{"products"}{grid};
+            obj.product_id = product{"wcoss_id"};
+            obj.product = product{"name"};
             
+            % Validate cycle
+            if isempty(cycle.TimeZone)
+                warning("Model cycle does not have assigned time zone. Defaulting to UTC.");
+            end
             cycle.TimeZone = "UTC";
             cycle_time = cycle - dateshift(cycle, "start", "day");
-            if ~ismember(cycle_time, products{grid}{"cycle_values"})
+            if ~ismember(cycle_time, product{"cycle_values"})
                 error("Invalid model cycle %s: %s-%s is produced %s", ...
-                    cycle, model, grid, products{grid}{"cycle_hint"});
+                    cycle, model, grid, product{"cycle_hint"});
             end
+            cycle.Format = "dd-MMM-yyyy HH z";
             obj.cycle = cycle;
 
-            invalid = setdiff(forecasts, products{grid}{"forecast_values"});
+            % Validate forecasts
+            invalid = setdiff(forecasts, product{"forecast_values"});
             if ~isempty(invalid)
-                error("Invalid model forecasts(s) %s: %s-%s is produced %s", ...
-                    mat2str(string(invalid)), model, grid, products{grid}{"forecast_hint"});
+                error("Invalid model forecasts(s) %s: %s %s is produced %s", ...
+                    mat2str(string(invalid)), upper(obj.model_id), grid, product{"forecast_hint"});
             end
             obj.forecast = forecasts;
+
+            % Generate filenames and URLs
+            fillin = @(fmt) nwpdata.populate(fmt, ...
+                PRODUCT = obj.product_id, FF = hours(obj.forecast), FFF = hours(obj.forecast), ...
+                YYYY = obj.cycle.Year, MM = obj.cycle.Month, DD = obj.cycle.Day, CC = obj.cycle.Hour);
+
+            obj.filename = fillin(model{"filename"});
+            src = fillin(model{"url"});
+            obj.url = fullfile(src, obj.filename);
         end
 
-        % function files = download(obj, folder)
-        %     
-        % end
-        %
-        % function output = read(obj, params)
-        %     
-        % end
+        function download(obj, folder)
+            arguments
+                obj nwpdata;
+                folder (1,1) string {mustBeFolder};
+            end
 
-        function time = get.time(obj)
-            time = obj.cycle + obj.forecast;
-            % fcst_text = string(obj.cycle, sprintf("(dd-MMM-yyyy HH z'+%g')", hours(obj.forecast)));
-            % time.Format = "dd-MMM-yyyy HHz" + "'" + fcst_text + "'";
-        end
+            dest = fullfile(folder, string(obj.cycle, "yyyy-MM-dd"));
+            [status, ~, ~] = mkdir(dest);
+            if ~status
+                error("Unable to create destination folder %s", dest);
+            end
 
-        function inv = get.inventory(obj)
-            if ismissing(obj.info)
-                inv = missing;
-            else
-                inv = obj.info.Metadata;
+            [files, notfiles] = bulk_download(dest, obj.url, obj.filename);
+            if ~isempty(notfiles)
+                error("Unable to download %d file(s)", length(notfiles));
+            end
+            obj.path = files;
+
+            for i_path = 1:length(obj.path)
+                obj.info(i_path) = georasterinfo(obj.path(i_path));
             end
         end
-    end
-    methods (Static)
+        
 
-        function defs = data_definitions
-            model_template = configureDictionary("string", "cell");
-            model_template{"products"} = missing;
-            model_template{"filename"} = missing;
-            model_template{"url"} = missing;
+        function crs = get.crs(obj)
+            if isdownloaded(obj)
+                crs = obj.info(1).CoordinateReferenceSystem;
+            else 
+                crs = [];
+            end
+        end
 
+        function tru = isdownloaded(obj)
+            tru = ~isempty(obj.path) && all(isfile(obj.path));
+        end
+        
+        function data = read(obj, params)
+            arguments
+                obj nwpdata;   
+                params.fields (1,:) string;
+                params.layers (1,:) string;
+                params.lats (1,2) double = [-Inf Inf];
+                params.lons (1,2) double = [-Inf Inf];
+            end
 
-            product_template = configureDictionary("string", "cell");
-            product_template{"product"} = missing;
-            product_template{"name"} = missing;
-            product_template{"grid_type"} = missing; % must be "geographic" or "planar"
-            product_template{"cycle_values"} = [hours(0) hours(6) hours(12) hours(18)];
-            product_template{"cycle_hint"} = "6-hourly at 00:00, 06:00, 12:00, 18:00";
-            product_template{"forecast_values"} = NaT;
-            product_template{"forecast_hint"} = NaT;
-            % product_template{"member_values"} = NaN;
-            % product_template{"member_hint"} = "Not an ensemble forecast";
+            downloadchk(obj);
+            % NOTE: assumes all rasters are the same
+            [~, indices, axes] = nwpdata.crop_raster(obj.info(1).RasterReference, ...
+                params.lats, params.lons);
+            fields = params.fields;
+            layers = params.layers;
 
-            % GFS definitions
-            onedeg = product_template;
-            onedeg{"product"} = "pgrb2.1p00";
-            onedeg{"name"} = "1.00 deg global latitude/longitude";
-            onedeg{"grid_type"} = "geographic";
-            onedeg{"forecast_values"} = hours(0:3:384);
-            onedeg{"forecast_hint"} = "3-hourly up to 384 hours";
+            metadata = obj.info(1).Metadata;
+            all_bands = nwpdata.find_bands(metadata, fields, layers);
+            output_fields = unique(metadata.Element(all_bands));
+            output_layers = unique(metadata.ShortName(all_bands));
+            times = obj.cycle + obj.forecast;
 
-            halfdeg = onedeg;
-            halfdeg{"product"} = "pgrb2.0p50";
-            halfdeg{"name"} = "0.50 deg global latitude/longitude";
+            % Allocate output
+            nrows = length(axes{2});
+            ncols = length(axes{4});
+            nlayers = length(output_layers);
+            nfields = length(output_fields);
+            ntimes = length(times);
 
-            quartdeg = onedeg;
-            quartdeg{"name"} = "0.25 deg global latitude/longitude";
-            quartdeg{"forecast_values"} = hours(0:1:384);
-            quartdeg{"forecast_hint"} = "hourly up to 384 hours";
+            data = xarray(NaN(nrows, ncols, ntimes, nlayers, nfields), ...
+                axes{:}, time = times, layer = output_layers, field = output_fields);
 
-            gfs_products = dictionary(["1.00 deg", "0.50 deg", "0.25 deg"], {onedeg, halfdeg, quartdeg});
+            for i_time = 1:ntimes
+                for i_layer = 1:nlayers
+                    this_info = obj.info(i_time);
+                    this_inventory = this_info.Metadata;
+                    layer = output_layers(i_layer);
+                    bands = nwpdata.find_bands(this_inventory, output_fields, layer);
+                    fields = this_inventory.Element(bands);
 
-            gfs = dictionary;
-            gfs{"products"} = gfs_products;
-            gfs{"name"} = "Global Forecast System";
-            gfs{"filename"} = "gfs.t<CC>z.<PRODUCT>.f<FFF>";
-            gfs{"url"} = "https://noaa-gfs-bdp-pds.s3.amazonaws.com/gfs.<YYYY><MM><DD>/<CC>/atmos";
+                    if length(bands) < length(output_fields)
+                        warning("Missing %s at layer %s", ...
+                            mat2str(setdiff(output_fields, fields)), layer);
+                    end
 
-            % NAM definitions
-            twelve = product_template;
-
-            twelve{"product"} = "awphys";
-            twelve{"name"} = " 12-km continental U.S. Lambert projected";
-            twelve{"grid_type"} = "planar";
-            twelve{"forecast_values"} = hours(0:1:84);
-            twelve{"forecast_hint"} = "hourly up to 84 hours";
-
-            three = product_template;
-            three{"product"} = "conusnest.hiresf";
-            three{"name"} = "3-km contiguous U.S. Lambert projected grid";
-            three{"grid_type"} = "planar";
-            three{"forecast_values"} = hours(0:1:60);
-            three{"forecast_hint"} = "hourly up to 60 hours";
-
-            nam = model_template;
-            nam{"products"} = dictionary(["12 km", "3 km"], {twelve three});
-            nam{"name"} = "North American Mesoscale";
-            nam{"filename"} = "nam.t<CC>z.<PRODUCT><FF>.tm00.grib2";
-            nam{"url"} = "https://noaa-nam-pds.s3.amazonaws.com/nam.<YYYY><MM><DD>";
-
-            % HRRR definitions
-            hrrr_product = product_template;
-            hrrr_product{"product"} = "conusnest.hiresf";
-            hrrr_product{"name"} = "3-km contiguous U.S. Lambert projected grid";
-            hrrr_product{"grid_type"} = "planar";
-            hrrr_product{"forecast_values"} = hours(0:1:60);
-            hrrr_product{"forecast_hint"} = "hourly up to 48 hours";
-            hrrr_product{"cycle_values"} = hours(0:1:23);
-            hrrr_product{"cycle_hint"} = "hourly";
-
-            hrrr = model_template;
-            hrrr{"product"} = dictionary("3 km", hrrr_product);
-            hrrr{"name"} = "High-Resolution Rapid Refresh";
-            hrrr{"filename"} = "hrrr.t<CC>z.<PRODUCT><FF>.grib2";
-            hrrr{"url"} = "https://noaa-hrrr-bdp-pds.s3.amazonaws.com/hrrr.<YYYY><MM><DD>/conus";
-
-            defs = dictionary(["gfs", "nam", "hrrr"], {gfs, nam, hrrr}); 
+                    [~, field_order] = ismember(fields, output_fields);
+                    layer_data = readgeoraster(this_info.Filename, Bands = bands);
+                    data{:, :, i_time, i_layer, field_order} = ...
+                        permute(layer_data(indices{:}, :), [1 2 4 5 3]);
+                end
+            end
         end
     end
 
 %% PUBLIC OBJECT METHODS
     methods (Static)
-        function [data, raster, metadata] = read(path, params)
-            % Read arbitrary data from GRIB2 file into xarray
-            % [data, raster, metadata] = nwpdata.read(path, Name = Value)
-            %   INPUTS
-            %   path        Path to GRIB2 file
-            %   
-            %   Required name-value arguments
-            %   fields      List of data fields (TMP, HGT, ...)
-            %               May be regex
-            %   layers      List of data layers (0-SFC, 100000-ISBL, EATM)
-            %               May be regex
-            %   
-            %   Optional name-value arguments
-            %   lats        Latitude limits 
-            %               default [-Inf Inf]
-            %   lons        Longitude limits 
-            %               default [-Inf Inf]
-            %   
-            %   OUTPUTS
-            %   data        xarray with dimensions (y/x or lat/lon, layer, field)
-            %   raster      Location referencing object
-            %   metadata    Table containing information about layers and fields
-            arguments
-                path (1,1) {mustBeFile}
-                params.fields (1,:) string;
-                params.layers (1,:) string;
-
-                params.lats (1,2) double = [-Inf Inf];
-                params.lons (1,2) double = [-Inf Inf];
-            end
-
-            % Initialization
-            fields = params.fields;
-            layers = params.layers;
-            info = georasterinfo(path);
-
-            raster = info.RasterReference;
-            [raster, indices, axes] = nwpdata.crop_raster(raster, params.lats, params.lons);
-
-            metadata = info.Metadata;
-            all_bands = nwpdata.find_bands(metadata, fields, layers);
-            output_fields = unique(metadata.Element(all_bands));
-            output_layers = unique(metadata.ShortName(all_bands));
-
-            nrows = length(axes{2});
-            ncols = length(axes{4});
-            nfields = length(output_fields);
-            nlayers = length(output_layers);
-
-            % Allocate output
-            data = xarray(NaN(nrows, ncols, nlayers, nfields), ...
-                axes{:}, layer = output_layers, field = output_fields);
-
-            for i_layer = 1:nlayers
-                layer = output_layers(i_layer);
-                bands = nwpdata.find_bands(metadata, output_fields, layer);
-                fields = metadata.Element(bands);
-
-                if length(bands) < length(output_fields)
-                    warning("Missing %s at layer %s", ...
-                        layer, mat2str(setdiff(output_fields, fields)));
-                end
-
-                [~, field_order] = ismember(fields, output_fields);
-                layer_data = readgeoraster(info.Filename, Bands = bands);
-                data{:, :, i_layer, field_order} = permute(layer_data(indices{:}, :), [1 2 4 3]);
-            end
-
-            time = metadata.ValidTime(1);
-            time.TimeZone = "UTC";
-            data.time = time;
-
-            if nargout == 3
-                metadata = metadata(all_bands);
-            end
-        end
-
-        % function data = read_internal(info, fields, layers)
-        %     arguments
-        %         info map.io.RasterInfo
-        %         fields (1, :) string;
-        %         layers (1, :) string;
-        %     end 
-        %
-        %     metadata = info.Metadata;
-        %     bands = nwpdata.find_bands(metadata, fields, layers);
-        %     layers = unique(metadata.ShortName(bands));
-        % end
-
-        function [filename, url] = filename(model, product, date, forecast)
-            arguments
-                model (1,1) string {mustBeMember(model, ["nam", "gfs", "hrrr"])};
-                product (1,1) string;
-                date (:, 1) datetime;
-                forecast (:, 1) duration = hours(0);
-            end 
-            
-            if ~isscalar(date) && ~isscalar(forecast) ...
-                && length(date) ~= length(forecast)
-                error("Date and forecast must be the same length if both are nonscalar");
-            end
-
-            % Define format replacements
-            reps = dictionary;
-            reps{"<FF>"} = compose("%02d", hours(forecast));
-            reps{"<FFF>"} = compose("%03d", hours(forecast));
-            reps{"<YYYY>"} = compose("%04d", date.Year);
-            reps{"<MM>"} = compose("%02d", date.Month);
-            reps{"<DD>"} = compose("%02d", date.Day);
-            reps{"<CC>"} = compose("%02d", date.Hour);
-            reps{"<PRODUCT>"} = product;
-
-            % https://noaa-hrrr-bdp-pds.s3.amazonaws.com/hrrr.20140731/conus/hrrr.t00z.wrfnatf01.grib2
-            switch model
-                case "gfs"
-                    filename = "gfs.t<CC>z.<PRODUCT>.f<FFF>";
-                    folder = "https://noaa-gfs-bdp-pds.s3.amazonaws.com/gfs.<YYYY><MM><DD>/<CC>/atmos";
-                case "nam"
-                    filename = "nam.t<CC>z.<PRODUCT><FF>.tm00.grib2";
-                    folder = "https://noaa-nam-pds.s3.amazonaws.com/nam.<YYYY><MM><DD>";
-                case "hrrr"
-                    filename = "hrrr.t<CC>z.<PRODUCT><FF>.grib2";
-                    folder = "https://noaa-hrrr-bdp-pds.s3.amazonaws.com/hrrr.<YYYY><MM><DD>/conus";
-            end
-
-            keys = reps.keys;
-            for i = 1:length(keys)
-                key = keys(i);
-                value = reps{key};
-                filename = strrep(filename, key, value);
-                folder = strrep(folder, key, value);
-            end
-            url = fullfile(folder, filename);
-        end
-
-        function str = populate(str, name, rep)
-            arguments
-                str (:, 1) string;
-            end
-            arguments (Repeating)
-                name (1, 1) string;
-                rep (:, 1) string;
-            end
-
-            for i = 1:length(name)
-                if isnumeric(rep{i})
-                    fmt = sprintf("%%0%dd", strlength(name{i}));
-                    rep{i} = compose(fmt, rep{i});
-                end
-                str = strrep(str, "<" + name{i} + ">", rep{i});
-            end
-        end
-
-        function files = download(dest, model, product, date, forecast)
-            arguments
-                dest (1,1) string {mustBeFolder};
-                model (1,1) string;
-                product (1,1) string;
-                date (:, 1) datetime;
-                forecast (:, 1) duration;
-            end 
-            
-            % create paths
-            dest = fullfile(dest, string(date, "yyyy-MM-dd"));
-            [status, ~, ~] = mkdir(dest);
-            if ~status
-                error("Unable to create %s", dest);
-            end
-
-            [filename, url] = nwpdata.filename(model, product, date, forecast);
-            files = bulk_download(dest, url, filename);
-        end
-
         function coords = latlon2raster(raster, lat, lon)
             % Project geographic coordiantes onto the raster's coordinate system
             arguments
@@ -376,8 +210,57 @@ classdef nwpdata
         end
     end
 
+    methods (Access = protected)
+        function downloadchk(obj)
+            err_id = "nwpdata:notDownloaded";
+            if ~isdownloaded(obj)
+                throwAsCaller(MException(err_id, "Files not downloaded." + ...
+                    "Please run <data>.download(<folder>)"));
+            end
+        end
+
+        function header = getHeader(~)
+            header = "Referencing object for Numerical Weather Prediction data.";
+            header = char(header);
+        end
+
+        function groups = getPropertyGroups(obj)
+            propnames = string(properties(obj));
+            proplist = struct;
+            for i_prop = 1:length(propnames)
+                propname = propnames(i_prop);
+                prop = obj.(propname);
+                if ~ismissing(prop) & ~isempty(prop)
+                    proplist.(propname) = prop;
+                end
+            end
+            
+            groups = matlab.mixin.util.PropertyGroup(proplist);
+        end
+    end
 %% INTERNAL UTILITIES
-methods (Static, Access = protected)
+    methods (Static, Access = protected)
+        function str = populate(str, name, rep)
+            arguments
+                str (:, 1) string;
+            end
+            arguments (Repeating)
+                name (1, 1) string;
+                rep (:, 1);
+            end
+
+            for i = 1:length(name)
+                if isnumeric(rep{i})
+                    fmt = sprintf("%%0%dd", strlength(name{i}));
+                    rep{i} = compose(fmt, rep{i});
+                end
+                pat = "<" + name{i} + ">";
+                if contains(str, pat)
+                    str = strrep(str, pat, rep{i});
+                end
+            end
+        end
+
         function [raster, indices, axes] = crop_raster(raster, lats, lons)
             arguments
                 raster 
@@ -447,6 +330,89 @@ methods (Static, Access = protected)
             field_idx = ~cellfun(@isempty, regexp(metadata.Element, fields));
             layer_idx = ~cellfun(@isempty, regexp(metadata.ShortName, layers));
             layers = find(field_idx & layer_idx);
+        end
+
+        function defs = data_definitions
+            model_template = configureDictionary("string", "cell");
+            model_template{"products"} = missing;
+            model_template{"filename"} = missing;
+            model_template{"url"} = missing;
+
+            product_template = configureDictionary("string", "cell");
+            product_template{"wcoss_id"} = missing;
+            product_template{"name"} = missing;
+            product_template{"grid_type"} = missing; % must be "geographic" or "planar"
+            product_template{"cycle_values"} = [hours(0) hours(6) hours(12) hours(18)];
+            product_template{"cycle_hint"} = "6-hourly at 00:00, 06:00, 12:00, 18:00";
+            product_template{"forecast_values"} = NaT;
+            product_template{"forecast_hint"} = NaT;
+            % product_template{"member_values"} = NaN;
+            % product_template{"member_hint"} = "Not an ensemble forecast";
+
+            % GFS definitions
+            onedeg = product_template;
+            onedeg{"wcoss_id"} = "pgrb2.1p00";
+            onedeg{"name"} = "1.00 deg global latitude/longitude";
+            onedeg{"grid_type"} = "geographic";
+            onedeg{"forecast_values"} = hours(0:3:384);
+            onedeg{"forecast_hint"} = "3-hourly up to 384 hours";
+
+            halfdeg = onedeg;
+            halfdeg{"wcoss_id"} = "pgrb2.0p50";
+            halfdeg{"name"} = "0.50 deg global latitude/longitude";
+
+            quartdeg = onedeg;
+            quartdeg{"name"} = "0.25 deg global latitude/longitude";
+            quartdeg{"forecast_values"} = hours(0:1:384);
+            quartdeg{"forecast_hint"} = "hourly up to 384 hours";
+
+            gfs_products = dictionary(["1.00 deg", "0.50 deg", "0.25 deg"], {onedeg, halfdeg, quartdeg});
+
+            gfs = dictionary;
+            gfs{"products"} = gfs_products;
+            gfs{"name"} = "Global Forecast System";
+            gfs{"filename"} = "gfs.t<CC>z.<PRODUCT>.f<FFF>";
+            gfs{"url"} = "https://noaa-gfs-bdp-pds.s3.amazonaws.com/gfs.<YYYY><MM><DD>/<CC>/atmos";
+
+            % NAM definitions
+            twelve = product_template;
+
+            twelve{"wcoss_id"} = "awphys";
+            twelve{"name"} = "12-km continental U.S. Lambert projected";
+            twelve{"grid_type"} = "planar";
+            twelve{"forecast_values"} = hours(0:1:84);
+            twelve{"forecast_hint"} = "hourly up to 84 hours";
+
+            three = product_template;
+            three{"wcoss_id"} = "conusnest.hiresf";
+            three{"name"} = "3-km contiguous U.S. Lambert projected grid";
+            three{"grid_type"} = "planar";
+            three{"forecast_values"} = hours(0:1:60);
+            three{"forecast_hint"} = "hourly up to 60 hours";
+
+            nam = model_template;
+            nam{"products"} = dictionary(["12 km", "3 km"], {twelve three});
+            nam{"name"} = "North American Mesoscale";
+            nam{"filename"} = "nam.t<CC>z.<PRODUCT><FF>.tm00.grib2";
+            nam{"url"} = "https://noaa-nam-pds.s3.amazonaws.com/nam.<YYYY><MM><DD>";
+
+            % HRRR definitions
+            hrrr_product = product_template;
+            hrrr_product{"wcoss_id"} = "conusnest.hiresf";
+            hrrr_product{"name"} = "3-km contiguous U.S. Lambert projected grid";
+            hrrr_product{"grid_type"} = "planar";
+            hrrr_product{"forecast_values"} = hours(0:1:60);
+            hrrr_product{"forecast_hint"} = "hourly up to 48 hours";
+            hrrr_product{"cycle_values"} = hours(0:1:23);
+            hrrr_product{"cycle_hint"} = "hourly";
+
+            hrrr = model_template;
+            hrrr{"wcoss_id"} = dictionary("3 km", hrrr_product);
+            hrrr{"name"} = "High-Resolution Rapid Refresh";
+            hrrr{"filename"} = "hrrr.t<CC>z.<PRODUCT><FF>.grib2";
+            hrrr{"url"} = "https://noaa-hrrr-bdp-pds.s3.amazonaws.com/hrrr.<YYYY><MM><DD>/conus";
+
+            defs = dictionary(["gfs", "nam", "hrrr"], {gfs, nam, hrrr}); 
         end
     end
 end
