@@ -1,7 +1,7 @@
 % NOTE: Requires Mapping Toolbox, <nwpdata>, and <xarray>
 classdef atmosphere < handle
     properties (GetAccess = public, SetAccess = protected)
-        ref nwpdata;
+        ref % nwpdata;
         prs_data % xarray;
         prs_sampler function_handle;
         epoch (1,1) datetime = missing;
@@ -24,6 +24,7 @@ classdef atmosphere < handle
                 ref (1,1) nwpdata;
                 params.lats (1, 2) double = [-Inf Inf];
                 params.lons (1, 2) double = [-Inf Inf];
+                % params.prs (1, 2) double = 
                 params.method (1, 1) string = "linear";
                 params.extrap (1, 1) string = "none";
             end
@@ -91,12 +92,16 @@ classdef atmosphere < handle
                 sample{3} = seconds(params.time - obj.epoch);
             end
 
-            result = obj.prs_sampler(sample).squeeze;
+            aircolumn = obj.prs_sampler(sample).squeeze;
+
             if isfinite(params.height)
-                data = [result.pressure, double(result)];
-                data = interp1(result.height, data, params.height);
+                data = [aircolumn.pressure, double(aircolumn)];
+                data_height = aircolumn.pick(field = "HGT").double;
+                data = interp1(data_height, data, params.height);
                 result = xarray(data(2:end), ...
-                    fields = result.fields, pressure = data(1));
+                    fields = aircolumn.field, pressure = data(1));
+            else
+                result = aircolumn;
             end
         end
     end
