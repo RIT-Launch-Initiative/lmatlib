@@ -110,7 +110,7 @@ classdef atmosphere < handle
                 % result{:} = data(2:end);
                 % result.pressure = data(1);
                 result = xarray(data(2:end), ...
-                    fields = aircolumn.field, pressure = data(1));
+                    field = aircolumn.field, pressure = data(1));
             else
                 result = aircolumn;
             end
@@ -119,6 +119,7 @@ classdef atmosphere < handle
                 return;
             end
 
+            result = result.permute(["pressure", "field"]);
             u_idx = find("UGRD" == result.field);
             v_idx = find("VGRD" == result.field);
 
