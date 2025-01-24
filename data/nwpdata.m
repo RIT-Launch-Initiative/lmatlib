@@ -8,7 +8,7 @@
 % Planned support
 % - <a href="https://www.nco.ncep.noaa.gov/pmb/products/gens/">GEFS (0.50, 0.25-deg)</a>
 
-classdef nwpdata < handle & matlab.mixin.CustomDisplay
+classdef nwpdata < matlab.mixin.Scalar & handle & matlab.mixin.CustomDisplay
     properties (GetAccess = public, SetAccess = protected)
         model (1,1) string = missing;
         product (1,1) string = missing;
@@ -143,23 +143,23 @@ classdef nwpdata < handle & matlab.mixin.CustomDisplay
 
             downloadchk(obj);
             % NOTE: assumes all rasters are the same
-            [~, indices, axes] = nwpdata.crop_raster(obj.info(1).RasterReference, ...
+            [~, indices, axes] = nwpdata.crop_raster(obj.info(end).RasterReference, ...
                 params.lats, params.lons);
             fields = params.fields;
             layers = params.layers;
 
-            metadata = obj.info(1).Metadata;
+            metadata = obj.info(end).Metadata;
             all_bands = nwpdata.find_bands(metadata, fields, layers);
-            output_fields = unique(metadata.Element(all_bands));
-            output_layers = unique(metadata.ShortName(all_bands));
+            output_fields = unique(metadata.Element(all_bands), "stable");
+            output_layers = unique(metadata.ShortName(all_bands), "stable");
             times = obj.cycle + obj.forecast;
 
             % Allocate output
             nrows = length(axes{2});
             ncols = length(axes{4});
+            ntimes = length(times);
             nlayers = length(output_layers);
             nfields = length(output_fields);
-            ntimes = length(times);
 
             data = xarray(NaN(nrows, ncols, ntimes, nlayers, nfields), ...
                 axes{:}, time = times, layer = output_layers, field = output_fields);
@@ -177,10 +177,17 @@ classdef nwpdata < handle & matlab.mixin.CustomDisplay
                             mat2str(setdiff(output_fields, fields)), layer);
                     end
 
-                    [~, field_order] = ismember(fields, output_fields);
+                    % [~, field_order] = ismember(fields, output_fields);
+                    % Don't use <ismember>! 
+                    % if only a subset of the fields exist, the data can't be assigned to using ':'
+                    % This is the second time I've made this mistake
+                    [present, i_output, i_file] = intersect(output_fields, fields, "stable");
+                    if isempty(present)
+                        continue;
+                    end
                     layer_data = readgeoraster(this_info.Filename, Bands = bands);
-                    data{:, :, i_time, i_layer, field_order} = ...
-                        permute(layer_data(indices{:}, :), [1 2 4 5 3]);
+                    data{:, :, i_time, i_layer, i_output} = ...
+                        permute(layer_data(indices{:}, i_file), [1 2 4 5 3]);
                 end
             end
         end
@@ -332,6 +339,7 @@ classdef nwpdata < handle & matlab.mixin.CustomDisplay
             layers = find(field_idx & layer_idx);
         end
 
+        % Create weather data definitions
         function defs = data_definitions
             model_template = configureDictionary("string", "cell");
             model_template{"products"} = missing;
@@ -366,7 +374,10 @@ classdef nwpdata < handle & matlab.mixin.CustomDisplay
             quartdeg{"forecast_values"} = hours(0:1:384);
             quartdeg{"forecast_hint"} = "hourly up to 384 hours";
 
-            gfs_products = dictionary(["1.00 deg", "0.50 deg", "0.25 deg"], {onedeg, halfdeg, quartdeg});
+            
+            % USER FACING NAMES
+            gfs_products = dictionary(["1.00 deg", "0.50 deg", "0.25 deg"], ...
+                {onedeg, halfdeg, quartdeg});
 
             gfs = dictionary;
             gfs{"products"} = gfs_products;
@@ -391,7 +402,7 @@ classdef nwpdata < handle & matlab.mixin.CustomDisplay
             three{"forecast_hint"} = "hourly up to 60 hours";
 
             nam = model_template;
-            nam{"products"} = dictionary(["12 km", "3 km"], {twelve three});
+            nam{"products"} = dictionary(["12 km", "3 km"], {twelve three}); % USER FACING NAMES
             nam{"name"} = "North American Mesoscale";
             nam{"filename"} = "nam.t<CC>z.<PRODUCT><FF>.tm00.grib2";
             nam{"url"} = "https://noaa-nam-pds.s3.amazonaws.com/nam.<YYYY><MM><DD>";
@@ -407,11 +418,12 @@ classdef nwpdata < handle & matlab.mixin.CustomDisplay
             hrrr_product{"cycle_hint"} = "hourly";
 
             hrrr = model_template;
-            hrrr{"wcoss_id"} = dictionary("3 km", hrrr_product);
+            hrrr{"products"} = dictionary("3 km", hrrr_product); % USER FACING NAMES
             hrrr{"name"} = "High-Resolution Rapid Refresh";
             hrrr{"filename"} = "hrrr.t<CC>z.<PRODUCT><FF>.grib2";
             hrrr{"url"} = "https://noaa-hrrr-bdp-pds.s3.amazonaws.com/hrrr.<YYYY><MM><DD>/conus";
 
+            % USER FACING NAMES
             defs = dictionary(["gfs", "nam", "hrrr"], {gfs, nam, hrrr}); 
         end
     end
