@@ -10,6 +10,10 @@ classdef atmosphere < handle
     properties (Access = protected)
         method (1, 1) string;
         extrap (1, 1) string;
+        % vertical (1, 1) string ...
+        %     {mustBeMember(vertical, ["y", "lat"])} = "lat";
+        % horizontal (1, 1) string ...
+        %     {mustBeMember(horizontal, ["x", "lon"])} = "lon";
         istimed (1, 1) logical = false;
     end
 
@@ -75,6 +79,8 @@ classdef atmosphere < handle
                 params.lat (1,1) double {mustBeFinite};
                 params.lon (1,1) double {mustBeFinite};
                 params.time (1,1) datetime = NaT;
+                params.windout (1,1) string ...
+                    {mustBeMember(params.windout, ["native", "geographic"])} = "native";
                 params.height (1,1) = NaN;
             end
 
@@ -92,17 +98,60 @@ classdef atmosphere < handle
                 sample{3} = seconds(params.time - obj.epoch);
             end
 
-            aircolumn = obj.prs_sampler(sample).squeeze;
+            aircolumn = obj.prs_sampler(sample);
+            aircolumn = aircolumn.squeeze.permute(["pressure", "field"]);
 
             if isfinite(params.height)
                 data = [aircolumn.pressure, double(aircolumn)];
                 data_height = aircolumn.pick(field = "HGT").double;
                 data = interp1(data_height, data, params.height);
+                % use already-allocated xarray - may be marginally more performant
+                % result = aircolumn.index(pressure = 1);
+                % result{:} = data(2:end);
+                % result.pressure = data(1);
                 result = xarray(data(2:end), ...
                     fields = aircolumn.field, pressure = data(1));
             else
                 result = aircolumn;
             end
+
+            if params.windout == "native"
+                return;
+            end
+
+            u_idx = find("UGRD" == result.field);
+            v_idx = find("VGRD" == result.field);
+
+            if isa(obj.ref.crs, "projcrs")  
+                % get the wind data and make it the right shape
+                nout = size(result, "pressure");
+                uvdata = result.index(field = [u_idx, v_idx]);
+
+                assert(isequal(size(uvdata), [nout, 2]), ...
+                    "Wrong shape input for array operation")
+
+                winds = [x, y] + uvdata;
+                [wlat, wlon] = projinv(obj.ref.crs, ...
+                    winds.pick(field = "UGRD").double, ...
+                    winds.pick(field = "VGRD").double);
+
+                dlat = wlat - params.lat;
+                dlon = wlon - params.lon;
+
+                R = obj.ref.crs.GeographicCRS.Spheroid.SemimajorAxis;
+                h = result.pick(field = "HGT").double;
+                northward = deg2rad(dlat) .* (R + h);
+                eastward = deg2rad(dlon) .* cosd(params.lat) .* (R + h);
+
+                assert(isequal(size(northward), [nout 1]), ...
+                    "Output N/E winds wrong shape for assignment")
+
+                result{:, u_idx} = eastward;
+                result{:, v_idx} = northward;
+            end
+
+            result.field(u_idx) = "EWND";
+            result.field(v_idx) = "NWND";
         end
     end
 end
