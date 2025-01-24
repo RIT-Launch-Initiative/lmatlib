@@ -409,7 +409,7 @@ classdef nwpdata < matlab.mixin.Scalar & handle & matlab.mixin.CustomDisplay
 
             % HRRR definitions
             hrrr_product = product_template;
-            hrrr_product{"wcoss_id"} = "conusnest.hiresf";
+            hrrr_product{"wcoss_id"} = "wrfprsf";
             hrrr_product{"name"} = "3-km contiguous U.S. Lambert projected grid";
             hrrr_product{"grid_type"} = "planar";
             hrrr_product{"forecast_values"} = hours(0:1:60);
@@ -418,7 +418,7 @@ classdef nwpdata < matlab.mixin.Scalar & handle & matlab.mixin.CustomDisplay
             hrrr_product{"cycle_hint"} = "hourly";
 
             hrrr = model_template;
-            hrrr{"products"} = dictionary("3 km", hrrr_product); % USER FACING NAMES
+            hrrr{"products"} = dictionary("3 km", {hrrr_product}); % USER FACING NAMES
             hrrr{"name"} = "High-Resolution Rapid Refresh";
             hrrr{"filename"} = "hrrr.t<CC>z.<PRODUCT><FF>.grib2";
             hrrr{"url"} = "https://noaa-hrrr-bdp-pds.s3.amazonaws.com/hrrr.<YYYY><MM><DD>/conus";
