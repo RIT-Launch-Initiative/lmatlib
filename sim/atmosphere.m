@@ -43,7 +43,6 @@ classdef atmosphere < handle
             % TODO restrict read data using raster metadata
             prs_data = obj.ref.read(fields = atmosphere.atmos_fields, ...
                 layers = atmosphere.prs_regex, lats = params.lats, lons = params.lons);
-            keyboard
 
             % Convert text layers to numeric pressures
             pressures = regexp(prs_data.layer, atmosphere.prs_regex, "tokens");
