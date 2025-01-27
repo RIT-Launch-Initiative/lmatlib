@@ -20,18 +20,16 @@ ref = namref;
 atmos = atmosphere(ref, lats = lat_limits, lons = lon_limits);
 urrg_air = atmos.sample(lat = urrg.lat, lon = urrg.lon, ...
     time = ref.cycle + ref.forecast(1));
-[~, ~, pres, ~] = atmosisa(urrg_air.pick(field = "HGT").double);
+[~, ~, pres, ~] = atmosisa(urrg_air.height);
 
 figure;
-plot(urrg_air.pressure, urrg_air.pick(field = "HGT"), ...
-    DisplayName = ref.model);
-plot(pres, urrg_air.pick(field = "HGT"), ...
-    DisplayName = "ISA");
+plot(urrg_air.pick(field = "PRES"), urrg_air.height, DisplayName = ref.model);
+plot(pres, urrg_air.height, DisplayName = "ISA");
 xlabel("Pressure [Pa]");
 ylabel("Height [gpm]");
 
 figure;
 urrg_air_N = atmos.sample(lat = urrg.lat, lon = urrg.lon, ...
     time = ref.cycle + ref.forecast(1), windout = "geographic");
-plot(urrg_air.pick(field=["UGRD", "VGRD"]), urrg_air.pick(field="HGT"), "--");
-plot(urrg_air_N.pick(field=["EWND", "NWND"]), urrg_air_N.pick(field="HGT"), "-");
+plot(urrg_air.pick(field=["UGRD", "VGRD"]), urrg_air.height, "--");
+plot(urrg_air_N.pick(field=["EWND", "NWND"]), urrg_air_N.height, "-");
