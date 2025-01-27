@@ -129,7 +129,7 @@ classdef atmosphere < handle
 
             if isfinite(params.height)
                 result = interp1(aircolumn.height, double(aircolumn), params.height);
-                result = xarray(result(2:end), field = aircolumn.field, height = params.height);
+                result = xarray(result, field = aircolumn.field, height = params.height);
             else
                 result = aircolumn;
             end
