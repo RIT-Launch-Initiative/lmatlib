@@ -67,7 +67,8 @@ classdef nwpdata < matlab.mixin.Scalar & handle & matlab.mixin.CustomDisplay
             
             % Validate cycle
             if isempty(cycle.TimeZone)
-                warning("Model cycle does not have assigned time zone. Defaulting to UTC.");
+                warning("nwpdata:timeZone", ...
+                    "Model cycle does not have assigned time zone. Defaulting to UTC.");
             end
             cycle.TimeZone = "UTC";
             cycle_time = cycle - dateshift(cycle, "start", "day");
@@ -173,7 +174,7 @@ classdef nwpdata < matlab.mixin.Scalar & handle & matlab.mixin.CustomDisplay
                     fields = this_inventory.Element(bands);
 
                     if length(bands) < length(output_fields)
-                        warning("Missing %s at layer %s", ...
+                        warning("nwpdata:missingFields", "Missing %s at layer %s", ...
                             mat2str(setdiff(output_fields, fields)), layer);
                     end
 
@@ -189,30 +190,6 @@ classdef nwpdata < matlab.mixin.Scalar & handle & matlab.mixin.CustomDisplay
                     data{:, :, i_time, i_layer, i_output} = ...
                         permute(layer_data(indices{:}, i_file), [1 2 4 5 3]);
                 end
-            end
-        end
-    end
-
-%% PUBLIC OBJECT METHODS
-    methods (Static)
-        function coords = latlon2raster(raster, lat, lon)
-            % Project geographic coordiantes onto the raster's coordinate system
-            arguments
-                raster
-                lat double;
-                lon double;
-            end
-
-            type = raster.CoordinateSystemType;
-            
-            switch type
-                case "planar"
-                    [coords.x, coords.y] = projfwd(raster.ProjectedCRS, lat, lon);
-                case "geographic"
-                    coords.lat = lat;
-                    coords.lon = lon;
-                otherwise
-                    error("Unrecognized coordinate system type '%s'", raster_type);
             end
         end
     end
@@ -245,6 +222,7 @@ classdef nwpdata < matlab.mixin.Scalar & handle & matlab.mixin.CustomDisplay
             groups = matlab.mixin.util.PropertyGroup(proplist);
         end
     end
+
 %% INTERNAL UTILITIES
     methods (Static, Access = protected)
         function str = populate(str, name, rep)
@@ -354,8 +332,6 @@ classdef nwpdata < matlab.mixin.Scalar & handle & matlab.mixin.CustomDisplay
             product_template{"cycle_hint"} = "6-hourly at 00:00, 06:00, 12:00, 18:00";
             product_template{"forecast_values"} = NaT;
             product_template{"forecast_hint"} = NaT;
-            % product_template{"member_values"} = NaN;
-            % product_template{"member_hint"} = "Not an ensemble forecast";
 
             % GFS definitions
             onedeg = product_template;
