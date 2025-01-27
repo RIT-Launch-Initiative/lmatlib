@@ -12,6 +12,13 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
         data double = [];
     end
 
+    properties (Access = protected)
+        access_labels (1, :) string {mustBeNonempty}= ...
+            ["pick", "pickt", "range", "index"];
+        access_fcns (1, :) cell {mustBeNonempty}= ...
+            {@acs_pick, @acs_pickt, @acs_range, @acs_index};
+    end
+
     methods
         function obj = xarray(data, axes, coordinates)
             % Construct array with named coordinate variables
@@ -38,7 +45,6 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
             end
 
             if nargin == 0
-                obj.data = [];
                 return;
             end
             
@@ -46,7 +52,6 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
                 axes = axes{1};
                 coordinates = coordinates{1};
             end
-
             if length(axes) ~= length(coordinates)
                 error("Specified %d axes but %d coordinates", ...
                     length(axes), length(coordinates));
@@ -219,112 +224,6 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
             end
         end
 
-        function [obj, indices] = pick(obj, axes, values)
-            % Index by exact equality, according to ismember(<values>, <coord>)
-            % Returns values in the order specified by <values>
-            % xarr.pick(axis = "value", ...)
-            
-            arguments
-                obj xarray
-            end
-            arguments (Repeating)
-                axes (1, 1) string;
-                values (:, 1);
-            end
-
-            dims = obj.convertdims(axes{:});
-            ops = repmat({':'}, 1, naxes(obj));
-
-            for i_ax = 1:length(axes)
-                [~, ops{dims(i_ax)}] = ismember(values{i_ax}, obj.(axes{i_ax}));
-                if ops{dims(i_ax)} == 0
-                    ops{dims(i_ax)} = [];
-                end
-            end
-
-            obj = obj(ops{:});
-            if nargout == 2
-                indices = ops;
-            end
-        end
-
-        function [obj, indices] = pickt(obj, axes, ranges)
-            % Index by equality with tolerance
-            % xarr.range(axis = [center tol])
-            arguments
-                obj xarray
-            end
-            arguments (Repeating)
-                axes (1, 1) string;
-                ranges (1, 2);
-            end
-            
-            ops = repmat({':'}, 1, naxes(obj));
-            dims = obj.convertdims(axes{:});
-
-            for i_ax = 1:length(axes)
-                coord = obj.(axes{i_ax});
-                rang = ranges{i_ax}(1) + ranges{i_ax}(2) * [-1 1];
-                ops{dims(i_ax)} = rang(1) <= coord & coord <= rang(2);
-            end
-
-            obj = obj(ops{:});
-            if nargout == 2
-                indices = ops;
-            end
-        end
-
-        function [obj, indices] = range(obj, axes, ranges)
-            % Index by range membership, according to min(rng) <= coord & coord <= max(rng)
-            % xarr.range(axis = [lower, upper])
-            %   [upper, lower] also works, and either can be +/- Inf
-            arguments
-                obj xarray
-            end
-            arguments (Repeating)
-                axes (1, 1) string;
-                ranges (1, 2);
-            end
-
-            ops = repmat({':'}, 1, naxes(obj));
-            dims = obj.convertdims(axes{:});
-
-            for i_ax = 1:length(axes)
-                coord = obj.(axes{i_ax});
-                ops{dims(i_ax)} = min(ranges{i_ax}) <= coord & coord <= max(ranges{i_ax});
-            end
-
-            obj = obj(ops{:});
-            if nargout == 2
-                indices = ops;
-            end
-        end
-
-
-        function [obj, indices] = index(obj, axes, indices)
-            % Index by logical or ordinal index
-            % xarr.index(axis = [indices...])
-            arguments
-                obj xarray
-            end
-            arguments (Repeating)
-                axes (1, 1) string;
-                indices (1, :);
-            end
-
-            ops = repmat({':'}, 1, naxes(obj));
-            dims = obj.convertdims(axes{:});
-
-            for i_ax = 1:length(axes)
-                ops{dims(i_ax)} = indices{i_ax};
-            end
-
-            obj = obj(ops{:});
-            if nargout == 2
-                indices = ops;
-            end
-        end
-
         function obj = rename(obj, old, new)
             % Rename xarray axis
             % xarr = xarr.rename(old, new)
@@ -383,6 +282,48 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
             end
         end
 
+        function indices = acs_pick(obj, dim, param)
+            coord = obj.coordinates{dim};
+            [present, indices] = ismember(param, coord);
+            if any(~present)
+                indices = MException("xarray:indexing", "Axis '%s' does not contain %s", ...
+                    obj.axes(dim), mat2str(param(~present)));
+            end
+        end
+
+        function indices = acs_pickt(obj, dim, param)
+            coord = obj.coordinates{dim};
+            indices = ((param(1) - param(2)) < coord) & (coord < (param(1) + param(2)));
+        end
+
+        function indices = acs_range(obj, dim, param)
+            coord = obj.coordinates{dim};
+            indices = (min(param) < coord) & (coord < max(param));
+        end
+
+        function indices = acs_index(~, ~, param)
+            indices = param;
+        end
+
+        function indices = access(obj, fcn, axes, params)
+            arguments
+                obj xarray
+                fcn (1,1) function_handle;
+            end 
+            arguments (Repeating)
+                axes (1,1) string;
+                params;
+            end
+            
+            indices = repmat({':'}, 1, naxes(obj));
+            dims = obj.convertdims(axes{:});
+            for i_dim = 1:length(dims)
+                dim = dims(i_dim);
+                indices{dim} = fcn(obj, dim, params{i_dim});
+            end
+
+        end
+
 %% INDEXING OVERRIDES
         function obj = parenReference(obj, operations)
             % Input processing and checking
@@ -405,19 +346,31 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
         end
 
         function obj = parenAssign(obj, operations, subobj)
+            arguments
+                obj xarray;
+                operations;
+                subobj xarray;
+            end
+            
             % Input processing and checking
             if ~isscalar(operations)
                 error("Chained paren-assignment not supported")
             end
             op = operations(1);
             indexcheck(obj, op);
+            dest = obj.(op);
 
-            % Test sub-object coordinates for equality
-            for i_axis = 1:naxes(obj)
-                coord = obj.coordinates{i_axis};
-                if ~isequal(coord(op.Indices{i_axis}), subobj.coordinates{i_axis})
-                    error("Unable to assign sub-array: mismatch along %s", ...
-                        obj.names(i_axis));
+            if ~isequal(size(dest), size(subobj))
+                error("Unable to perform assignment because the left side is %s and the right side is %s", ...
+                    string(size(dest)).join("-by"), string(size(subobj)).join("-by-"));
+            end
+
+            for i_axis = 1:naxes(dest)
+                if dest.axes(i_axis) ~= subobj.axes(i_axis)
+                    error("Mismatched names at dimension %d", i_axis);
+                end
+                if ~isequal(dest.coordinates{i_axis}, subobj.coordinates{i_axis})
+                    error("Mismatched coordinate values at dimension %d", i_axis);
                 end
             end
 
@@ -468,53 +421,89 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
         end
 
         % OVERRIDE DOT-INDEXING TO ACCESS ARRAY AXES
-        function coord = dotReference(obj, operations)
+        function result = dotReference(obj, operations)
             op = operations(1);
 
-            dim = obj.convertdims(op.Name);
-            coord = obj.coordinates{dim};
+            i_accessor = find(op.Name == obj.access_labels);
+            if isempty(i_accessor) 
+                % axis access
+                dim = obj.convertdims(op.Name);
+                result = obj.coordinates{dim};
+                if ~isscalar(operations)
+                    result = result.(operations(2:end));
+                end
 
-            if ~isscalar(operations)
-                coord = coord.(operations(2:end));
+            else
+                % indexor access
+                if isscalar(operations) 
+                    error("Accessors must have additional brace or paren-indices")    
+                end
+                indices = obj.access(obj.access_fcns{i_accessor}, operations(2).Indices{:});
+                if operations(2).Type == "Paren"
+                    result = obj(indices{:});
+                elseif operations(2).Type == "Brace"                
+                    result = obj{indices{:}};
+                else
+                    error("Accessors must have indices specified as name-value pairs")    
+                end
+
+                if length(operations) > 2
+                    result = result.(operations(3:end));
+                end
             end
         end
 
         function obj = dotAssign(obj, operations, input)
             op = operations(1);
-            axis = op.Name;
-            dim = find(axis == obj.axes, 1);
-
-            if isempty(dim) % new axis
-                if ~isscalar(operations)
-                    error("Invalid chained indexing while creating new axis");
-                end
-                if axis == ""
-                    error("New axis must have non-empty name");
-                end
-                dim = length(obj.axes) + 1;
-                obj.axes(dim) = axis;
-                obj.coordinates{dim} = input;
-            else % assign new values to existing axis
-                if isscalar(operations)
+            i_accessor = find(op.Name == obj.access_labels);
+            if isempty(i_accessor)
+                % axis creation or acccess
+                axis = op.Name;
+                dim = find(axis == obj.axes, 1);
+                if isempty(dim) % new axis
+                    if ~isscalar(operations)
+                        error("Invalid chained indexing while creating new axis");
+                    end
+                    if axis == ""
+                        error("New axis must have non-empty name");
+                    end
+                    dim = length(obj.axes) + 1;
+                    obj.axes(dim) = axis;
                     obj.coordinates{dim} = input;
-                elseif length(operations) == 2
-                    obj.coordinates{dim}.(operations(2)) = input;
+                else % assign new values to existing axis
+                    if isscalar(operations)
+                        obj.coordinates{dim} = input;
+                    elseif length(operations) == 2
+                        obj.coordinates{dim}.(operations(2)) = input;
+                    end
                 end
-            end
-            
-            % Validate newly assigned coordinates
-            if ~isvector(obj.coordinates{dim})
-                error("Coordinate variables must be vectors");
-            end
+                % Validate newly assigned coordinates
+                if ~isvector(obj.coordinates{dim})
+                    error("Coordinate variables must be vectors");
+                end
 
-            if length(obj.coordinates{dim}) ~= size(obj.data, dim)
-                error("Mismatched axes: size(xarr, %d) = %d but coordinate has length %d", ...
-                    dim, size(obj.data, dim), obj.coordinates{dim});
-            end
+                if length(obj.coordinates{dim}) ~= size(obj.data, dim)
+                    error("Mismatched axes: size(xarr, %d) = %d but coordinate has length %d", ...
+                        dim, size(obj.data, dim), length(obj.coordinates{dim}));
+                end
 
-            % Silently enforce column-vector coordinate variables by transposing row
-            if size(obj.coordinates{dim}, 2) > 1
-                obj.coordinates{dim} = obj.coordinates{dim}';
+                % Silently enforce column-vector coordinate variables by transposing row
+                if size(obj.coordinates{dim}, 2) > 1
+                    obj.coordinates{dim} = obj.coordinates{dim}';
+                end
+            else
+                if length(operations) ~= 2 
+                    error("Accessor-based assignment must be of the form\n\t<array>.<access>(<parameters>)")    
+                end
+
+                indices = obj.access(obj.access_fcns{i_accessor}, operations(2).Indices{:});
+                if operations(2).Type == "Paren"
+                    obj(indices{:}) = input;
+                elseif operations(2).Type == "Brace"                
+                    obj{indices{:}} = input;
+                else
+                    error("Accessors must have indices specified as name-value pairs")    
+                end
             end
         end
 
@@ -548,7 +537,23 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
             
             if first_isx && second_isx 
                 % operate on two xarrays
-                [order, common] = matchdims(first.axes, second.axes);
+                matches = first.axes' == second.axes; % relies on xarray.axes forced to be a row
+                % find axes in common
+                [common_from_fst, common_from_snd] = find(matches);
+                common = first.axes(common_from_fst);
+
+                only_in_fst = find(~any(matches, 2));
+                only_in_snd = find(~any(matches, 1));
+                dims_total = size(matches, 1) + size(matches, 2) - length(common);
+                new_dims = (size(matches, 2)+1):dims_total;
+
+                % create permutation vector
+                order = NaN(1, size(matches, 1));
+                order(common_from_fst) = common_from_snd;
+                order(only_in_fst) = new_dims; %#ok
+                order = [order only_in_snd];
+                
+                assert(all(isfinite(order)), "Some permutation dimensions not assigned");
 
                 iseq = dimequal(first, second, common);
                 if any(~iseq)
@@ -589,36 +594,6 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
                     throwAsCaller(mex);
                 end
             end
-        end
-
-        function [order, common] = matchdims(first, second)
-            % [order, common] = matchdims(first, second)
-            % first, second (string)    axis names from first and second arguments
-            % axes common to both are tested for exact equality and ordered as in the first
-            % axes only in the first are ordered as in the first
-            % axes only in the second are appended to the end
-            arguments
-                first (1, :) string;
-                second (1, :) string;
-            end 
-
-            matches = first' == second; % relies on xarray.axes forced to be a row
-            % find axes in common
-            [common_from_fst, common_from_snd] = find(matches);
-            common = first.axes(common_from_fst);
-
-            only_in_fst = find(~any(matches, 2));
-            only_in_snd = find(~any(matches, 1));
-            dims_total = size(matches, 1) + size(matches, 2) - length(common);
-            new_dims = (size(matches, 2)+1):dims_total;
-
-            % create permutation vector
-            order = NaN(1, size(matches, 1));
-            order(common_from_fst) = common_from_snd;
-            order(only_in_fst) = new_dims; %#ok
-            order = [order only_in_snd];
-            
-            assert(all(isfinite(permutation)), "Some permutation dimensions not assigned");
         end
     end
 %
@@ -704,14 +679,6 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
             [terp, obj] = create_data_interpolant(obj, axes, method, extrap);
             trailing_dims = (length(axes)+1):naxes(obj);
             trailing_coords = obj.coordinates(trailing_dims);
-            % trailing_axes = obj.axes(trailing_dims);
-            %
-            % template_size = [ones(1, length(axes)), size(obj, trailing_dims)];
-            % template_axes = []
-            % template_coords = [repmat({1}, 1, length(axes)), obj.coordinates(trailing_dims)];
-            %
-            % lens = cellfun(@length, trailing_coords);
-            % template = xarray(NaN(lens), trailing_axes, trailing_coords);
 
             interpfcn_h = @interpfcn;
             function result = interpfcn(varargin)
@@ -763,59 +730,6 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
             interp_vectors = obj.coordinates(1:length(axes));
             interpolant = griddedInterpolant(interp_vectors, obj.data, method, extrap);
         end
-
-        % function fun = interpolant(obj, dims, varargin)
-        %     terp_dims = obj.convertdims(dims);
-        %     terp_names = obj.axes(terp_dims);
-        %     preserve_dims = 1:naxes(obj);
-        %     preserve_dims(terp_dims) = [];
-        %
-        %     gridvectors = obj.coordinates(terp_dims);
-        %     obj = sort(obj, terp_dims, "ascend");
-        %     obj = permute(obj, [terp_dims preserve_dims]);
-        %
-        %     types = repmat("", 1, length(gridvectors));
-        %     for i = 1:length(gridvectors)
-        %         if isnumeric(gridvectors{i})
-        %             types(i) = "numeric";
-        %         elseif isduration(gridvectors{i})
-        %             types(i) = "duration";
-        %             gridvectors{i} = seconds(gridvectors{i});
-        %         elseif isdatetime(gridvectors{i})
-        %             types(i) = "datetime";
-        %             gridvectors{i} = datenum(gridvectors{i});
-        %         else
-        %             error("Interpolation along non-numeric or time axes not supported");
-        %         end
-        %     end
-        %
-        %     terp = griddedInterpolant(gridvectors, double(obj), varargin{:});
-        %     fun = @interpolate_and_assign;
-        %
-        %     function out = interpolate_and_assign(values)
-        %         if length(values) ~= length(gridvectors)
-        %         end
-        %         values = varargin{2:2:end};
-        %         if length(names) ~= length(values)
-        %             error("Interpolant requires equal number of names and value vectors");
-        %         end
-        %         dims = obj.convertdims(names);
-        %
-        %         gridvalues = gridvectors;
-        %         for i = 1:length(values)
-        %             if isnumeric(values{i})
-        %                 gridvalues{dims(i)} = values{i};
-        %             elseif isduration(values{i});
-        %                 gridvalues{dims(i)} = seconds(values{i});
-        %             elseif isdatetime(values{i});
-        %                 gridvalues{dims(i)} = datenum(values{i});
-        %             else
-        %                 error("Interpolation along non-numeric or time axes not supported");
-        %             end
-        %         end
-        %         
-        %     end
-        % end
     end
 end
 
