@@ -33,3 +33,5 @@ urrg_air_N = atmos.sample(lat = urrg.lat, lon = urrg.lon, ...
     time = ref.cycle + ref.forecast(1), windout = "geographic");
 plot(urrg_air.pick(field=["UGRD", "VGRD"]), urrg_air.height, "--");
 plot(urrg_air_N.pick(field=["EWND", "NWND"]), urrg_air_N.height, "-");
+xlabel("Wind component [m/s]");
+ylabel("Height [gpm]");
