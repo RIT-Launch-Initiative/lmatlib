@@ -166,9 +166,12 @@ classdef nwpdata < matlab.mixin.Scalar & handle & matlab.mixin.CustomDisplay
                 axes{:}, time = times, layer = output_layers, field = output_fields);
 
             for i_time = 1:ntimes
+                this_info = obj.info(i_time);
+                this_inventory = this_info.Metadata;
+
+                tic;
+                fprintf("Reading %s... ", this_info.Filename);
                 for i_layer = 1:nlayers
-                    this_info = obj.info(i_time);
-                    this_inventory = this_info.Metadata;
                     layer = output_layers(i_layer);
                     bands = nwpdata.find_bands(this_inventory, output_fields, layer);
                     fields = this_inventory.Element(bands);
@@ -190,6 +193,8 @@ classdef nwpdata < matlab.mixin.Scalar & handle & matlab.mixin.CustomDisplay
                     data{:, :, i_time, i_layer, i_output} = ...
                         permute(layer_data(indices{:}, i_file), [1 2 4 5 3]);
                 end
+
+                fprintf("Completed in %.1f sec\n", toc);
             end
         end
     end
@@ -336,20 +341,20 @@ classdef nwpdata < matlab.mixin.Scalar & handle & matlab.mixin.CustomDisplay
             % GFS definitions
             onedeg = product_template;
             onedeg{"wcoss_id"} = "pgrb2.1p00";
-            onedeg{"name"} = "1.00 deg global latitude/longitude";
+            onedeg{"name"} = "1.00 deg global latitude-longitude";
             onedeg{"grid_type"} = "geographic";
             onedeg{"forecast_values"} = hours(0:3:384);
             onedeg{"forecast_hint"} = "3-hourly up to 384 hours";
 
             halfdeg = onedeg;
             halfdeg{"wcoss_id"} = "pgrb2.0p50";
-            halfdeg{"name"} = "0.50 deg global latitude/longitude";
+            halfdeg{"name"} = "0.50 deg global latitude-longitude";
 
             quartdeg = onedeg;
-            quartdeg{"name"} = "0.25 deg global latitude/longitude";
+            quartdeg{"wcoss_id"} = "pgrb2.0p25";
+            quartdeg{"name"} = "0.25 deg global latitude-longitude";
             quartdeg{"forecast_values"} = hours(0:1:384);
             quartdeg{"forecast_hint"} = "hourly up to 384 hours";
-
             
             % USER FACING NAMES
             gfs_products = dictionary(["1.00 deg", "0.50 deg", "0.25 deg"], ...
@@ -372,7 +377,7 @@ classdef nwpdata < matlab.mixin.Scalar & handle & matlab.mixin.CustomDisplay
 
             three = product_template;
             three{"wcoss_id"} = "conusnest.hiresf";
-            three{"name"} = "3-km contiguous U.S. Lambert projected grid";
+            three{"name"} = "3-km contiguous U.S. Lambert projected";
             three{"grid_type"} = "planar";
             three{"forecast_values"} = hours(0:1:60);
             three{"forecast_hint"} = "hourly up to 60 hours";
@@ -386,7 +391,7 @@ classdef nwpdata < matlab.mixin.Scalar & handle & matlab.mixin.CustomDisplay
             % HRRR definitions
             hrrr_product = product_template;
             hrrr_product{"wcoss_id"} = "wrfprsf";
-            hrrr_product{"name"} = "3-km contiguous U.S. Lambert projected grid";
+            hrrr_product{"name"} = "3-km contiguous U.S. Lambert projected";
             hrrr_product{"grid_type"} = "planar";
             hrrr_product{"forecast_values"} = hours(0:1:60);
             hrrr_product{"forecast_hint"} = "hourly up to 48 hours";
