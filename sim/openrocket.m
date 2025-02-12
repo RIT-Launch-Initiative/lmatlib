@@ -14,7 +14,8 @@
 %   - Version of MATLAB <a href="https://www.mathworks.com/support/requirements/openjdk.html">compatible</a> with the Java version used by OpenRocket. 
 %   At time of writing, the latest release is OR 23.09 using JDK 17, which
 %   requires MATLAB 2024a or newer
-%   - Set up Java class path and Java environment using openrocket_setup(...)
+%   - Set up Java class path and Java environment by running
+%   openrocket_setup(...) once
 % 
 % There are four types of OpenRocket object to pay attention to:
 % - Document, which contains the Rocket, FlightConfigurations, and Simulations.
