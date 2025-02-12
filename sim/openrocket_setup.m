@@ -1,4 +1,4 @@
-% openrocket_setup(path) - 
+% openrocket_setup(path) - set up OpenRocket-MATLAB connection (run only once ever)
 %   <path> is the absolute path to the OpenRocket installation 
 %   Contains OpenRocket.jar and jre/
 %   
