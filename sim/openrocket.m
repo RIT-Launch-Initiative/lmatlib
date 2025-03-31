@@ -3,12 +3,6 @@
 % underlying Java methods for automating OpenRocket calculations and
 % simulations.
 % 
-% OVERVIEW
-% The class starts the required Java modules to open an OpenRocket document,
-% make modifications, and save it. The object methods are concise wrappers for
-% accessing parts of the document. The class methods are concise wrappers for
-% acting on parts of the document.
-% 
 % PREREQUISITES
 %   - OpenRocket installation, containing jre/ and OpenRocket.jar class file
 %   - Version of MATLAB <a href="https://www.mathworks.com/support/requirements/openjdk.html">compatible</a> with the Java version used by OpenRocket. 
@@ -16,7 +10,26 @@
 %   requires MATLAB 2024a or newer
 %   - Set up Java class path and Java environment by running
 %   openrocket_setup(...) once
-% 
+%
+% OVERVIEW
+% The class starts the required Java modules to open an OpenRocket document,
+% make modifications, and save it. The object methods are concise wrappers for
+% accessing parts of the document. The class methods are concise wrappers for
+% acting on parts of the document.
+%
+% In general,
+% - All Java objects in OpenRocket are reference-type (handle), not
+% copy-on-write as is typical for MATLAB. Unless an object is deep-copied,
+% modifying instances will modify the underlying OpenRocket document.
+% - If you are programmatically modifying the simulation, you will likely need to
+% use the relevant Java object's methods directly (getOptions(), setHeight(),
+% ...). They are usually self-explanatory (if somewhat cumbersome). 
+% - Tab-completion works for Java object methods, but to get a complete list of
+% the methods available, you can use methodsview(class(java_object)), for example:
+%   or = openrocket("test.ork");
+%   fins = or.component(class = "FinSet");
+%   methodsview(class(fins))
+%
 % There are four types of OpenRocket object to pay attention to:
 % - Document, which contains the Rocket, FlightConfigurations, and Simulations.
 % - RocketComponent, which store the components' properties and possibly other
@@ -25,25 +38,11 @@
 % mounts.
 % - Simulation, which contain the settings for a given simulaation, including
 % the Rocket, FlightConfiguration, and SimulationOptions.
-%
-% NOTES
-% - The <document> member is theoretically enough to perform any action in
-% OpenRocket programmatically. 
-% - All Java objects in OpenRocket are reference-type (handle), not
-% copy-on-write as is typical for MATLAB. Unless an object is deep-copied,
-% modifying instances will modify the underlying OpenRocket document.
-% 
-% 
-% If you are programmatically modifying the simulation, you will likely need to
-% use the relevant Java object's methods directly (getOptions(), setHeight(),
-% ...). They are usually self-explanatory (if somewhat cumbersome).
-% Tab-completion works for Java object methods, but to get a complete list of
-% the methods available, you can use methodsview(class(java_object)), for example:
-%   or = openrocket("test.ork");
-%   fins = or.component(class = "FinSet");
-%   methodsview(class(fins))
 % 
 %% LISTING
+% The <document> member is theoretically enough to perform any action in
+% OpenRocket programmatically. These functions are defined for convenience.
+%
 % [Inputs and outputs in brackets are optional]
 % Document methods ------------------------------------------------------------
 % or = openrocket(path)
@@ -94,7 +93,7 @@
 % - Operations cannot be parallelized becuase PARFOR <a href="https://www.mathworks.com/help/parallel-computing/objects-and-handles-in-parfor-loops.html">requires</a> the data 
 % passed in to support SAVE and LOAD, which Java objects in MATLAB do not
  
-classdef (Sealed) openrocket < handle
+classdef (Sealed) openrocket < handle & matlab.mixin.Scalar
     
     properties (SetAccess = private, GetAccess = public)
         document; % OpenRocketDocument Java object
@@ -124,13 +123,24 @@ classdef (Sealed) openrocket < handle
     methods (Static, Access = public)
         function data = simulate(sim, params)
             % Simulate an OpenRocket simulation 
-            %   [data = ]openrocket.simulate(ident[, stop = <stop condition>][, outputs = <variables>])
-            %       ident       Simulation number, or name, or object (returned fom sims(...))
-            %       stop        (Optional) Currently, only supports "apogee" to
-            %                   stop sim at apogee
-            %       outputs     (Optional) Convert flight data
+            %   [data = ]openrocket.simulate(sim[, Name = Value])
+            %       sim         Simulation object
+            %
+            %   Name-value arguments 
+            %   All optional - none mutually exclusive
+            %       outputs     Convert flight data - required IF [data =] output is used
             %                   String array e.g. ["Altitude", "Stability margin"]
             %                   magic value of "ALL" outputs all values
+            %       stop        "apogee" to stop at apogee
+            %                   positive duration to stop at specific time
+            %       atmos       Custom atmospheric model
+            %                   Table with columns HGT [m ASL], TMP [K], PRES [Pa]
+            %       wind        Custom wind model
+            %                   Table with columns HGT [m ASL], UGRD [m/s], VGRD [m/s]
+            %                   U - Eastward component / V - Northward component
+            %       drag        Custom drag curve
+            %                   Table with columns MACH [-], DRAG [-]
+            %
             %   EXAMPLES
             %       or = openrocket("data/OTIS.ork");
             %       sim = or.sims(1);
@@ -143,17 +153,21 @@ classdef (Sealed) openrocket < handle
                 sim (1, 1) {openrocket.mustBeA(sim, "document.Simulation")};
                 params.stop (1, :) = [];
                 params.outputs (1, :) string = [];
+                params.atmos table = table; 
+                params.wind table = table;
+                params.drag table = table;
             end
 
-
             % NOTE if this is modified, make sure the input to simulate() is
-            % exactly the class Java expects - if it isn't, MATLAB thinks
-            % you're trying to call simulate() from some random Toolbox instead
-            % of giving a Java error.
+            % exactly the class Java expects (SimulationListener array) - if it
+            % isn't, MATLAB will emit an inane error from a random Toolbox with
+            % a simulate() function instead of an error related to the Java object.
 
-            import net.sf.openrocket.simulation.listeners.system.*
-            import net.sf.openrocket.simulation.extension.example.*
+            % import net.sf.openrocket.simulation.listeners.system.*
+            % import net.sf.openrocket.simulation.extension.example.*
+            import net.sf.openrocket.simulation.FlightEvent;
             listener_class = "net.sf.openrocket.simulation.listeners.SimulationListener"; 
+            extension_class = "net.sf.openrocket.simulation.extension.SimulationExtension";
             
             outs = params.outputs;
             if isempty(outs) && nargout > 0
@@ -162,29 +176,68 @@ classdef (Sealed) openrocket < handle
                 warning("Simulation output requested through 'outputs = ....', but not assigned.");
             end
 
-            listeners = javaArray(listener_class, 0); %#ok 
-            % listeners has an #ok on both lines because the sim call is in an
-            % evalc() so MATLAB doesn't know we're using this variable and warns
-            extensions = java.util.List.of();
-            if isstring(params.stop) && params.stop == "apogee"
-                listeners = javaArray(listener_class, 1);
-                listeners(1) = OptimumCoastListener.INSTANCE; %#ok
+            % Initialize listeners
+            % NOTE: Not using an Import statement for OpenRocketExtensions so
+            % that someone without that .jar file can keep using this class
+            % (albeit with limited functionality) if they don't have it.
+            % if ~isempty(params.stop)
+            %     % TODO the listener supports, in principle, a delay-after-event
+            %     % operation; figure out a neat way of presenting that to the
+            %     % user.
+            %     
+            %     listeners = javaArray(listener_class, 1);
+            %     if isstring(params.stop) && (params.stop == "apogee")
+            %         listeners(1) = OpenRocketExtensions.StopEventSimulationListener(...
+            %             openrocket.flight_event("APOGEE"), 0);
+            %     elseif isduration(params.stop)
+            %         listeners(1) = OpenRocketExtensions.StopEventSimulationListener(...
+            %             openrocket.flight_event("IGNITION"), seconds(params.stop));
+            %     else
+            %         error("Invalid stop condition. Must be a valid event name or a duration.")
+            %     end
+            % end
+
+            % Initialize extensions
+            extensions = {};
+    
+            if isstring(params.stop) && (params.stop == "apogee")
+                extensions(end+1) = OpenRocketExtensions.EarlySimulationStop(...
+                    openrocket.flight_event("APOGEE"), 0);
             elseif isduration(params.stop)
-                stopper = StopSimulation();
-                stopper.setStopStep(intmax);
-                stopper.setReportRate(intmax);
-                stopper.setStopTime(seconds(params.stop));
-                extensions = java.util.List.of(stopper);
+                 extensions(end+1) = OpenRocketExtensions.EarlySimulationStop(...
+                    openrocket.flight_event("IGNITION"), seconds(params.stop));
             end
 
+            if ~isempty(params.atmos)
+                openrocket.mustHaveCols(params.atmos, ["HGT", "TMP", "PRES"]);
+                extensions(end+1) = OpenRocketExtensions.TabulatedAtmosphere(...
+                    params.atmos.HGT, params.atmos.TMP, params.atmos.PRES);
+            end
+
+            if ~isempty(params.wind)
+                openrocket.mustHaveCols(params.atmos, ["HGT", "UGRD", "VGRD"]);
+                extensions(end+1) = OpenRocketExtensions.Tabulatedwind(...
+                    params.wind.HGT, params.wind.UGRD, params.wind.VGRD);
+            end
+
+            if ~isempty(params.drag)
+                openrocket.mustHaveCols(params.drag, ["MACH", "DRAG"]);
+                extensions(end+1) = OpenRocketExtensions.TabulatedDrag(...
+                    params.drag.MACH, params.drag.DRAG);
+            end
+
+            % Incantations for Java side
+            % if isempty(extensions)
+            %     extensions = java.util.List.of();
+            % else
+            % end
+            extensions = java.util.List.of(extensions{:});
+
+            % Execute 
+            listeners = javaArray(listener_class, 0); % incantation for Java side
             sim.copyExtensionsFrom(extensions);
-
-            % The stop simulation listener feels the need to print directly to
-            % the command line instead of the logging queue, so we eat sim's
-            % output with evalc so it doesn't pollute our command line.
-            evalc("sim.simulate(listeners)");
-
-            sim.copyExtensionsFrom(java.util.List.of());
+            sim.simulate(listeners)
+            sim.copyExtensionsFrom(java.util.List.of()); % clear extensions to not corrupt the document
             
             if ~isempty(outs) && nargout > 0
                 if outs == "ALL"
@@ -338,6 +391,33 @@ classdef (Sealed) openrocket < handle
             obj.saver.save(obj.file, obj.document);
         end
 
+        function export(obj, path)
+            % Save OpenRocket document to RASAero file
+            %   export(ork, dest)
+            %   ork     OpenRocket instance
+            %   dest    Destination
+            arguments
+                obj (1,1) openrocket
+                path (1,1) string;
+            end
+
+            [~, ~, ext] = fileparts(path);
+            if ext ~= ".CDX1"
+                error("RasAero export files must have extension CDX1")
+            end
+
+            exporter = net.sf.openrocket.file.rasaero.export.RASAeroSaver();
+            file = java.io.FileOutputStream(path);
+            oc = onCleanup(@() file.close());
+
+            % These inputs are required but not used - they can stay empty
+            opts = net.sf.openrocket.document.StorageOptions();
+            warns = net.sf.openrocket.logging.WarningSet();
+            errs = net.sf.openrocket.logging.ErrorSet();
+
+            exporter(file, obj.document, opts, warns, errs);
+        end
+
         function out = sims(obj, sim)
             % Get simulations 
             %   sim = or.sims()       
@@ -359,7 +439,6 @@ classdef (Sealed) openrocket < handle
                 error("Identifier not supported");
             end
         end
-
 
         function rkt = rocket(obj)
             % Get Rocket object 
@@ -427,7 +506,6 @@ classdef (Sealed) openrocket < handle
         end
 
     end
-
 
 %% AERODYNAMIC CALCULATIONS
     methods
@@ -670,6 +748,17 @@ classdef (Sealed) openrocket < handle
             dict("Stability margin") = "cal";
         end
 
+
+        function ev = flight_event(name)
+            arguments
+                name (1,1) string;
+            end
+
+            % internal methods are converted to $<name> instead of .<name> so
+            % we have to do this garbage
+            ev = javaMethod("valueOf", "net.sf.openrocket.simulation.FlightEvent$Type", name);
+        end
+
         % https://www.mathworks.com/help/compiler_sdk/java/rules-for-data-conversion-between-java-and-matlab.html
         function doubles = jarr2double(jarr)
             % Convert Java ArrayList to MATLAB double array
@@ -693,6 +782,21 @@ classdef (Sealed) openrocket < handle
                 ME = MException("openrocket:invalid_type", ...
                     sprintf("\n%sExpected %s\nGot %s", prefix, fullname, class(input)));
                 throwAsCaller(ME);
+            end
+        end
+
+        function mustHaveCols(input, cols)
+            arguments
+                input table;
+                cols (1,:) string;
+            end
+
+            err_id = "openrocket:invalidTableInput";
+            notpresent = setdiff(cols, input.Properties.VariableNames);
+            if ~isempty(notpresent)
+                mex = MException(err_id, "Required table columns %s not present", ...
+                    mat2str(notpresent));
+                throwAsCaller(mex);
             end
         end
 

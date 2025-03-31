@@ -7,7 +7,8 @@
 % NOTE: Overwrites $prefdir/javaclasspath.txt
 % NOTE: Modifies Java environment - ensure MATLAB <a href="https://www.mathworks.com/support/requirements/openjdk.html">supports</a> OR's Java runtime
 % NOTE: Some of OpenRocket's classes override MATLAB classes, which may cause
-% errors (but no breaking changes are known of at time of writing)
+% errors in the command window every time you start up MATLAB. However, no
+% breaking changes are known of at time of writing.
 function openrocket_setup(openrocket_path)
     arguments
         openrocket_path (1,1) string;
@@ -24,6 +25,10 @@ function openrocket_setup(openrocket_path)
     if ~isfile(jar_path)
         error("'OpenRocket.jar' not found under %s\n", openrocket_path);
     end
+    ext_path = fullfile(openrocket_path, "OpenRocketExtensions.jar");
+    if ~isfile(ext_path)
+        warning("OpenRocketExtensions.jar not found; openrocket may have limited capabilities");
+    end
     
     jenv(jenv_path);
     jcp = fullfile(prefdir, "javaclasspath.txt");
@@ -33,10 +38,15 @@ function openrocket_setup(openrocket_path)
     % https://stackoverflow.com/questions/16366059/best-way-to-override-matlabs-default-static-javaclasspath
     fwrite(fid, "<before>");
     fwrite(fid, jar_path);
+    fprintf(fid, "\n");
+    fwrite(fid, "<before>");
+    fwrite(fid, ext_path);
     fclose(fid);
 
-    jenv
+    disp(jenv);
     fprintf("OpenRocket class path written to %s\n", jcp);
-    fprintf("Restart MATLAB to apply changes\n");
+    type(jcp);
+
+    fprintf("\n\nACTION REQUIRED: Restart MATLAB to apply changes\n");
 end
 
