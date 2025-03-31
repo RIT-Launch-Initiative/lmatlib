@@ -13,32 +13,19 @@
 %       For "terp" format, this is a griddedInterpolant object that can be
 %       queried with CD(Ma, alpha).
 
-function lookups = import_rasaero_aerodata(path, format)
+function aerodata = import_rasaero_aerodata(path)
     arguments
         path (1,1) string;
-        format (1,1) string = "grid";
     end
     data = readtable(path, VariableNamingRule = "preserve");
+    names = string(data.Properties.VariableNames);
     [Ma, alpha, schema] = unstack_indices(data.Mach, data.Alpha);
+    data_names = names(~contains(names, ["Mach", "Alpha"]));
+    aerodata = xarray(zeros(length(Ma), length(alpha), length(data_names)), ...
+        ["mach", "aoa", "field"], {Ma, deg2rad(alpha), data_names});
 
-    lookups.Ma = Ma;
-    lookups.alpha = alpha;
-    % names = string(data.Properties.VariableNames)
-    % y_variables = names(~contains(names, ["Mach", "Alpha"]))
-    y_variables = ["CD", "CL", "CN", "CP"];
-
-    for var = y_variables
-        stacked = data.(var);
-        grid = stacked(schema);
-
-        if format == "grid"
-            lookups.(var) = grid;
-        elseif format == "terp"
-            [x, y] = ndgrid(Ma, alpha);
-            lookups.(var) = griddedInterpolant(x, y, grid);
-        else
-            error("Output format '%s' not recognized", outputs.format);
-        end
+    for var = data_names
+        aerodata.pick{"field", var} = data{:, var}(schema);
     end
 end
 
