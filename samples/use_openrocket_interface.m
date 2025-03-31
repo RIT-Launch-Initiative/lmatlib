@@ -3,8 +3,8 @@ clear; close all;
 run_sweep = false;
 run_monte = false;
 run_opt = false;
-run_atmos = false;
-run_wind = false;
+run_atmos = true;
+run_wind = true;
 run_drag = true;
 
 otis_path = "data/OTIS.ork"; %pfullfile("samples", "data", "OTIS.ork");
@@ -161,7 +161,7 @@ if run_atmos || run_wind || run_drag
     otis = openrocket(otis_path);
     sim = otis.sims("20MPH-SA");
 
-    baseline_flight_data = otis.simulate(sim, stop = "apogee", outputs = "ALL");
+    baseline_flight_data = otis.simulate(sim, outputs = "ALL");
 
     baseline_drag_data = table;
     baseline_drag_data.MACH = (0:0.1:2)';
@@ -182,22 +182,50 @@ end
 
 % Atmospheric model
 if run_atmos
-    
+    site = launchsites("spaceport-america");
+    times = datetime(2024, 06, 21, TimeZone = "MST") + hours([10 12]);
+    launchtime = datetime(2024, 06, 21, 10, 21, 00, TimeZone = "MST");
+    refs = ncep.anl("gfs", "pgrb2.1p00", times);
+    refs.attach("data");
+    atmos = atmosphere.from_ncep(refs, lats = site.lat + [-1 1], ...
+        lons = site.lon + [-1 1]);
+    ac = atmos.aircolumn(site.lat, site.lon, launchtime);
+    airdata = table;
+    airdata.HGT = ac.pick{"field", "HGT"};
+    airdata.PRES = 100*str2double(extract(ac.layer, digitsPattern));
+    airdata.TMP = ac.pick{"field", "TMP"} + 273.15;
+
+    atmos_flight_data = otis.simulate(sim, outputs = "ALL", atmos = airdata);
+    plot_trajectory(traj_ax, atmos_flight_data, DisplayName = "Custom atmosphere");
 end
 
 % Wind model
 if run_wind
-       
+    site = launchsites("spaceport-america");
+    times = datetime(2024, 06, 21, TimeZone = "MST") + hours([10 12]);
+    launchtime = datetime(2024, 06, 21, 10, 21, 00, TimeZone = "MST");
+    refs = ncep.anl("gfs", "pgrb2.1p00", times);
+    refs.attach("data");
+    atmos = atmosphere.from_ncep(refs, lats = site.lat + [-1 1], ...
+        lons = site.lon + [-1 1]);
+    ac = atmos.aircolumn(site.lat, site.lon, launchtime);
+    winddata = table;
+    winddata.HGT = ac.pick{"field", "HGT"};
+    winddata.UGRD = ac.pick{"field", "UGRD"};
+    winddata.VGRD = ac.pick{"field", "VGRD"};
+
+    wind_flight_data = otis.simulate(sim, outputs = "ALL", wind = winddata);
+    plot_trajectory(traj_ax, wind_flight_data, DisplayName = "Custom wind");
 end
 
 % Drag model
 if run_drag
     models = import_rasaero_aerodata("data/OMEN_RA_Aerodata.csv");
     drag_data = table;
-    drag_data.MACH = models.Ma;
-    drag_data.DRAG = models.CD(:,1);
+    drag_data.MACH = models.mach;
+    drag_data.DRAG = models.pick{"field", "CD", "aoa", 0};
     
-    drag_flight_data = otis.simulate(sim, stop = "apogee", outputs = "ALL", drag = drag_data);
+    drag_flight_data = otis.simulate(sim, outputs = "ALL", drag = drag_data);
 
     plot_trajectory(traj_ax, drag_flight_data, DisplayName = "Modified drag");
 
@@ -206,7 +234,6 @@ if run_drag
     plot(baseline_drag_data.MACH, baseline_drag_data.DRAG, ...
         LineWidth = 2, DisplayName = "OpenRocket");
     plot(drag_data.MACH, drag_data.DRAG, DisplayName = "RasAero II");
-    plot(models.Ma, models.CD(:, 3), DisplayName = "4 degrees");
     xlabel("Mach number");
     ylabel("Drag coefficient");
     legend;

@@ -215,8 +215,8 @@ classdef (Sealed) openrocket < handle & matlab.mixin.Scalar
             end
 
             if ~isempty(params.wind)
-                openrocket.mustHaveCols(params.atmos, ["HGT", "UGRD", "VGRD"]);
-                extensions(end+1) = OpenRocketExtensions.Tabulatedwind(...
+                openrocket.mustHaveCols(params.wind, ["HGT", "UGRD", "VGRD"]);
+                extensions(end+1) = OpenRocketExtensions.TabulatedWind(...
                     params.wind.HGT, params.wind.UGRD, params.wind.VGRD);
             end
 
