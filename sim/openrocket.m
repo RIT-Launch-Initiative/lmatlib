@@ -163,8 +163,6 @@ classdef (Sealed) openrocket < handle & matlab.mixin.Scalar
             % isn't, MATLAB will emit an inane error from a random Toolbox with
             % a simulate() function instead of an error related to the Java object.
 
-            % import net.sf.openrocket.simulation.listeners.system.*
-            % import net.sf.openrocket.simulation.extension.example.*
             import net.sf.openrocket.simulation.FlightEvent;
             listener_class = "net.sf.openrocket.simulation.listeners.SimulationListener"; 
             extension_class = "net.sf.openrocket.simulation.extension.SimulationExtension";
@@ -176,33 +174,14 @@ classdef (Sealed) openrocket < handle & matlab.mixin.Scalar
                 warning("Simulation output requested through 'outputs = ....', but not assigned.");
             end
 
-            % Initialize listeners
-            % NOTE: Not using an Import statement for OpenRocketExtensions so
-            % that someone without that .jar file can keep using this class
-            % (albeit with limited functionality) if they don't have it.
-            % if ~isempty(params.stop)
-            %     % TODO the listener supports, in principle, a delay-after-event
-            %     % operation; figure out a neat way of presenting that to the
-            %     % user.
-            %     
-            %     listeners = javaArray(listener_class, 1);
-            %     if isstring(params.stop) && (params.stop == "apogee")
-            %         listeners(1) = OpenRocketExtensions.StopEventSimulationListener(...
-            %             openrocket.flight_event("APOGEE"), 0);
-            %     elseif isduration(params.stop)
-            %         listeners(1) = OpenRocketExtensions.StopEventSimulationListener(...
-            %             openrocket.flight_event("IGNITION"), seconds(params.stop));
-            %     else
-            %         error("Invalid stop condition. Must be a valid event name or a duration.")
-            %     end
-            % end
-
-            % Initialize extensions
+            % Determine which extensions to add based on the optional arguments
+            
+            % Initialize extension array
             extensions = {};
     
-            if isstring(params.stop) && (params.stop == "apogee")
+            if isstring(params.stop) %&& (params.stop == "apogee")
                 extensions(end+1) = OpenRocketExtensions.EarlySimulationStop(...
-                    openrocket.flight_event("APOGEE"), 0);
+                    openrocket.flight_event(upper(params.stop)), 0);
             elseif isduration(params.stop)
                  extensions(end+1) = OpenRocketExtensions.EarlySimulationStop(...
                     openrocket.flight_event("IGNITION"), seconds(params.stop));
@@ -226,19 +205,18 @@ classdef (Sealed) openrocket < handle & matlab.mixin.Scalar
                     params.drag.MACH, params.drag.DRAG);
             end
 
-            % Incantations for Java side
-            % if isempty(extensions)
-            %     extensions = java.util.List.of();
-            % else
-            % end
+            % convert extension cell array to many arguments to fit what List.of expects
             extensions = java.util.List.of(extensions{:});
 
             % Execute 
             listeners = javaArray(listener_class, 0); % incantation for Java side
             sim.copyExtensionsFrom(extensions);
             sim.simulate(listeners)
-            sim.copyExtensionsFrom(java.util.List.of()); % clear extensions to not corrupt the document
+
+            % clear extensions to not corrupt the document
+            sim.copyExtensionsFrom(java.util.List.of()); 
             
+            % output data, if requested
             if ~isempty(outs) && nargout > 0
                 if outs == "ALL"
                     data = openrocket.get_data(sim);
@@ -248,7 +226,7 @@ classdef (Sealed) openrocket < handle & matlab.mixin.Scalar
             end
         end
 
-        function data = get_data(sim, variables)
+        function data = get_data(sim, variables, branch)
             % Retreive data from an OpenRocket simulation
             % data = openrocket.get_data(sim[, variables])
             %   sim         Simulation object (returned by openrocket.sims() or directly accessed)
@@ -260,6 +238,7 @@ classdef (Sealed) openrocket < handle & matlab.mixin.Scalar
             arguments
                 sim {openrocket.mustBeA(sim, "document.Simulation")};
                 variables string = openrocket.types.keys;
+                branch (1,1) double = 0;
             end
 
             mustBeMember(variables, openrocket.types.keys);
@@ -271,7 +250,7 @@ classdef (Sealed) openrocket < handle & matlab.mixin.Scalar
             end
 
             variables = variables(variables ~= openrocket.time_name);
-            branch = sim.getSimulatedData().getBranch(0); % NOTE assumes branch 0
+            branch = sim.getSimulatedData().getBranch(branch); 
 
             % Create destination timetable
             time = openrocket.jarr2double(branch.get(openrocket.types(openrocket.time_name)));
@@ -309,7 +288,6 @@ classdef (Sealed) openrocket < handle & matlab.mixin.Scalar
             data.Properties.VariableContinuity = repmat("continuous", 1, width(data));
             data.Properties.Description = "openrocket"; % Identify as OpenRocket import
         end
-
 
         function copy = copy_config(cfg, name)
             % Deep-copy a flight configuration
@@ -406,7 +384,6 @@ classdef (Sealed) openrocket < handle & matlab.mixin.Scalar
                 error("RasAero export files must have extension CDX1")
             end
 
-            exporter = net.sf.openrocket.file.rasaero.export.RASAeroSaver();
             file = java.io.FileOutputStream(path);
             oc = onCleanup(@() file.close());
 
@@ -415,26 +392,44 @@ classdef (Sealed) openrocket < handle & matlab.mixin.Scalar
             warns = net.sf.openrocket.logging.WarningSet();
             errs = net.sf.openrocket.logging.ErrorSet();
 
-            exporter(file, obj.document, opts, warns, errs);
+            exporter = net.sf.openrocket.file.rasaero.export.RASAeroSaver();
+            exporter.save(file, obj.document, opts, warns, errs);
         end
 
-        function out = sims(obj, sim)
+        function out = sims(obj, sim, nout)
             % Get simulations 
             %   sim = or.sims()       
             %       returns all simulations
             %   sim = or.sims(index)  
-            %       return simulation at indices (1-based)
-            %   sim = or.sims(name)   
-            %       return all simulations matching name
+            %       return simulation at 1-based indices (1-based)
+            %   sim = or.sims(name[, nout = length(name)])
+            %       return simulations matching name(s) or <pattern> object
+            %
+            %       nout defaults to specify the same size, so that asking for
+            %       N names expects N outputs, but can be changed for (for
+            %       example) pattern-matched outputs. It will cause sims() to
+            %       error on an incorrect number of outputs so that
+            %       error-checking does not need to be repeatedly performed
+            %       outside the funciton.
+            
+            arguments (Input)
+                obj openrocket;
+                sim (1,:) {mustBeA(sim, ["numeric", "string", "pattern"])};
+                nout (1,1) double = length(sim);
+            end
 
             sims = toArray(obj.document.getSimulations());
             if nargin == 1
-                out = sims; 
+                out = sims;
             elseif isnumeric(sim)
                 out = sims(sim);
             elseif isstring(sim)
                 names = arrayfun(@(sim) string(sim.getName()), sims);
-                out = sims(names == sim);
+                out = sims(matches(names, sim));
+                if length(out) ~= nout
+                    error("Expected %d output(s) but matched %d of%s", ...
+                        nout, length(out), compose("\n\t%s", names).join(""));
+                end
             else 
                 error("Identifier not supported");
             end
@@ -760,6 +755,7 @@ classdef (Sealed) openrocket < handle & matlab.mixin.Scalar
         end
 
         % https://www.mathworks.com/help/compiler_sdk/java/rules-for-data-conversion-between-java-and-matlab.html
+        
         function doubles = jarr2double(jarr)
             % Convert Java ArrayList to MATLAB double array
             double_arr = javaArray("java.lang.Double", jarr.size);
@@ -845,8 +841,6 @@ classdef (Sealed) openrocket < handle & matlab.mixin.Scalar
 
             components = components(match);
         end
-
-
     end
 
 end

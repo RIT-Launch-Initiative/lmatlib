@@ -245,6 +245,16 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
             obj = template;
         end
 
+        function [tf, dims] = ismatrix(da)
+            dims = find(size(da) > 1);
+            tf = length(dims) == 2;
+        end
+
+        function [tf, dims] = isvector(da)
+            dims = find(size(da) > 1);
+            tf = isscalar(dims);
+        end
+
         function obj = permute(obj, order)
             % Re-order axes by name or number
             % xarr = permute(xarr, [dim1 dim2 ...]);
@@ -266,9 +276,9 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
             obj.coordinates = obj.coordinates(dimorder);
         end
 
-        function obj = leading(obj, order)
-            % Turn specified dimensions into leading dimensions
-            leading_order = obj.convertdims(order)';
+        function obj = align(obj, order)
+            % xarr = xarr.align(order) 
+            leading_order = obj.convertdims(order);
             trailing_order = 1:naxes(obj);
             trailing_order(leading_order) = [];
 
@@ -366,6 +376,9 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
             % Convert named or numbered axes to numeric dimensions
             % dims = convertdims(xarr, [axis1 axis2])
             % dims = convertdims(xarr, axis1, axis2)
+            arguments (Output)
+                dims (1,:) double {mustBeInteger, mustBePositive};
+            end
             
             % array from input
             dims = [varargin{:}];
@@ -383,6 +396,113 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
                 throwAsCaller(mex);
             end
         end
+
+        function gh = plot(obj, varargin)
+            arguments
+                obj xarray;
+            end
+            arguments (Repeating)
+                varargin
+            end
+
+            [isv, dim] = isvector(obj);
+            assert(isv, "<xarray> input to <plot> must have exactly one non-scalar dimension");
+
+            gh = plot(obj.coordinates{dim}, obj.data(:), varargin{:});
+            if gh.Parent.YLabel.String == ""
+                gh.Parent.YLabel.String = obj.axes(dim);
+            end
+        end
+
+        function gh = imagesc(obj, opts)
+            arguments
+                obj xarray;
+                opts.cmap (1,1) string = "parula";
+                opts.clabel (1,1) string = missing;
+            end
+
+            [ism, dim] = ismatrix(obj);
+            assert(ism, "<xarray> input to <imagesc> must have exactly two non-scalar dimensions");
+            obj = obj.align(dim);
+            gh = imagesc(obj.coordinates{2}, obj.coordinates{1}, squeeze(obj.data));
+
+            ax = gh.Parent;
+            ax.YDir = "normal";
+
+            if ax.XLabel.String == ""
+                ax.XLabel.String = obj.axes(2);
+            end
+            if ax.YLabel.String == ""
+                ax.YLabel.String = obj.axes(1);
+            end
+
+            colormap(ax, opts.cmap);
+            if ~ismissing(opts.clabel)
+                cb = colorbar(ax);
+                cb.Label.String = opts.clabel;
+            end
+            axis(ax, "tight");
+        end
+
+        function gh = surf(obj, opts)
+            arguments
+                obj xarray;
+                opts.cmap (1,1) string = "parula";
+                opts.clabel (1,1) string = missing;
+            end
+
+            [ism, dim] = ismatrix(obj);
+            assert(ism, "<xarray> input to <imagesc> must have exactly two non-scalar dimensions");
+            obj = obj.align(dim);
+            gh = surf(obj.coordinates{2}, obj.coordinates{1}, squeeze(obj.data));
+
+            ax = gh.Parent;
+
+            if ax.XLabel.String == ""
+                ax.XLabel.String = obj.axes(2);
+            end
+            if ax.YLabel.String == ""
+                ax.YLabel.String = obj.axes(1);
+            end
+
+            colormap(ax, opts.cmap);
+            if ~ismissing(opts.clabel)
+                cb = colorbar(ax);
+                cb.Label.String = opts.clabel;
+            end
+            axis(ax, "tight");
+        end
+
+        % function gh = surf(obj, scale, varargin)
+        %     arguments
+        %         obj xarray;
+        %     end
+        %     arguments (Repeating)
+        %         varargin;
+        %     end
+        %
+        %     [ism, dim] = ismatrix(obj);
+        %     assert(ism, "Data input must be a matrix");
+        %     obj = obj.align(dim);
+        %     gh = surf(obj.coordinates{2}, obj.coordinates{1}, data, varargin{:});
+        %
+        %     ax = gh.Parent;
+        %
+        %     if ax.XLabel.String == ""
+        %         ax.XLabel.String = obj.axes(2);
+        %     end
+        %     if ax.YLabel.String == ""
+        %         ax.YLabel.String = obj.axes(1);
+        %     end
+        %     if ax.ZLabel.String == ""
+        %         ax.ZLabel.String = z_label;
+        %     end
+        %
+        %     colormap(ax, "bone");
+        %     cb = colorbar(ax);
+        %     cb.Label.String = z_label;
+        %     axis(ax, "tight");
+        % end
     end
 
     methods (Access = protected)
@@ -674,12 +794,9 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
             end
 
             sz(args{i_dims}) = [];
-            if isscalar(sz)
-                sz = [sz 1];
-            end
 
             obj.data = func(obj.data, args{:});
-            obj.data = reshape(obj.data, sz); % get rid of the singleton
+            obj.data = reshape(obj.data, [sz 1]); % get rid of the singleton
             obj.axes(args{i_dims}) = [];
             obj.coordinates(args{i_dims}) = [];
         end
@@ -865,103 +982,22 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
             obj = obj(ops{:});
         end
 
-        function result = interp(obj, method, axes, values)
-            % result = interp(xarr, method, Axis, Values);
-            % Interpolate over <xarray> dimensions
-
+        function obj = interp(obj, axes, values)
             arguments
                 obj xarray;
-                method (1,1) string;
             end
-
             arguments (Repeating)
                 axes (1,1) string;
                 values (1,:) double;
             end
-            
-            axes = string(axes);
-            [interpolant, obj] = create_data_interpolant(obj, axes, method);
 
-            result = interpolant(values{:});
-            new_axes = obj.axes;
-            new_coords = obj.coordinates;
-            new_coords(1:length(values)) = values;
-            result = xarray(result, new_axes, new_coords);
-        end
-
-        function interpfcn_h = interpolant(obj, axes, method, extrap)
-            arguments
-                obj xarray;
-                axes (1,:) string;
-                method (1,1) string = "linear";
-                extrap (1,1) string = method;
-            end
-
-            [terp, obj] = create_data_interpolant(obj, axes, method, extrap);
-            trailing_dims = (length(axes)+1):naxes(obj);
-            trailing_coords = obj.coordinates(trailing_dims);
-
-            % TODO 
-            result_sz = size(obj);
-            result_sz(1:length(axes)) = 1;
-            result_template = xarray(NaN(result_sz), obj.axes, ...
-                [repmat({NaN}, 1, length(axes)), trailing_coords]);
-
-            interpfcn_h = @interpfcn;
-            function result = interpfcn(varargin)
-                if iscell(varargin{1})
-                    gridvectors = varargin{1};
-                else
-                    gridvectors = varargin;
-                end
-                if length(gridvectors) ~= length(axes)
-                    error("Expected %d grid vectors, %d specified", length(axes), length(gridvectors));
-                end
-                result_data = terp(gridvectors);
-                if all(cellfun(@isscalar, gridvectors))
-                    result = result_template;
-                    result.data = result_data;
-                    result.coordinates(1:length(axes)) = gridvectors;
-                else
-                    result = xarray(result_data, obj.axes, [gridvectors trailing_coords]);
-                end
-            end
-        end
-
-        function [interpolant, obj] = create_data_interpolant(obj, axes, method, extrap)
-            % Create data interpolant
-            % [interpolant, obj] = create_data_interpolant(obj, method, extrap, axes)
-            %       Performs input checks and sorts specified axes
-            arguments
-                obj xarray;
-                axes (1,:) string;
-                method (1,1) string;
-                extrap (1,1) string = "nearest";
-            end
-            
-            interp_dims = obj.convertdims(axes);
-
-            err_id = "xarray:interpolate";
-            lengths = cellfun(@length, obj.coordinates(interp_dims));
-            scalars = axes(lengths == 1);
-            if ~isempty(scalars)
-                throwAsCaller(MException(err_id, "Dimension(s) %s are scalar." + ...
-                    " Interpolation is not supported along scalar dimensions.", ...
-                    mat2str(scalars)));
-            end
-
-            isnum = cellfun(@isnumeric, obj.coordinates(interp_dims));
-            nonnum = axes(~isnum);
-            if ~isempty(nonnum)
-                throwAsCaller(MException(err_id, "Dimension(s) %s are non-numeric." + ...
-                    " Interpolation is not supported along non-numeric dimensions.", ...
-                    mat2str(nonnum)));
-            end
-
-            obj = obj.sort(interp_dims, "ascend");
-            obj = obj.leading(interp_dims);
-            interp_vectors = obj.coordinates(1:length(axes));
-            interpolant = griddedInterpolant(interp_vectors, obj.data, method, extrap);
+            axes = [axes{:}];
+            obj = obj.align(axes);
+            result_data = interpn(obj.coordinates{1:length(axes)}, obj.data, ...
+                values{:}, "linear", NaN);
+            obj.data = reshape(result_data, size(result_data, length(axes)+1:ndims(result_data)));
+            obj.axes(1:length(axes)) = [];
+            obj.coordinates(1:length(axes)) = [];
         end
     end
 end
