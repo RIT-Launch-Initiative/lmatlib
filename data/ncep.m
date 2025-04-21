@@ -145,7 +145,7 @@ classdef ncep < handle
                 uv = data.align("field").pick{"field", ["UGRD", "VGRD"]};
 
                 jacob = ncep.projjacob(crs, "geographic", lat, lon);
-                % jacob = jacob ./ vecnorm(jacob, 2, 1);
+                jacob = jacob ./ vecnorm(jacob, 2, 1);
 
                 winds = pagemtimes(jacob, uv);
 
@@ -286,6 +286,9 @@ classdef ncep < handle
 
             reftime.TimeZone = "UTC";
             validtime.TimeZone = "UTC";
+            if any(reftime > validtime)
+                error("Reference time must occur on or before valid time");
+            end
             ref_day = dateshift(reftime, "start", "day");
             candidate_cycles = ref_day + ncep.list(model, product);
             i_cycle = find(candidate_cycles <= reftime, 1, "last");
@@ -299,8 +302,8 @@ classdef ncep < handle
                 [~, i_depth] = min(abs(nearest_cycle + candidate_depths - validtime));
                 depths = candidate_depths(i_depth);
             else
-                [~, i_fst] = find(nearest_cycle + candidate_depths <= min(validtime), 1, "last");
-                [~, i_lst] = find(nearest_cycle + candidate_depths >= max(validtime), 1, "first");
+                i_fst = find(nearest_cycle + candidate_depths <= min(validtime), 1, "last");
+                i_lst = find(nearest_cycle + candidate_depths >= max(validtime), 1, "first");
                 depths = candidate_depths(i_fst:i_lst);
             end
 
@@ -325,9 +328,9 @@ classdef ncep < handle
                 [~, i_time] = min(abs(candidate_datetimes - validtime));
                 datetimes = candidate_datetimes(i_time);
             else
-                [~, i_fst] = find(candidate_datetimes <= min(validtime), 1, "last");
-                [~, i_lst] = find(candidate_datetimes >= min(validtime), 1, "first");
-                datetimes = candidate_datetimes(i_fst:i_lst)
+                i_fst = find(candidate_datetimes <= min(validtime), 1, "last");
+                i_lst = find(candidate_datetimes >= max(validtime), 1, "first");
+                datetimes = candidate_datetimes(i_fst:i_lst);
             end
             
             refs = arrayfun(@(cyc) ncep(model, product, cyc, hours(0)), datetimes);
@@ -359,6 +362,48 @@ classdef ncep < handle
             [jacob(2,2), jacob(1,2)] = projinv(crs, x, y + delta);
             jacob = jacob - [lon; lat];
             jacob = deg2rad(jacob) .* radius .* [cosd(lat); 1];
+        end
+
+        function [rows] = search(index, filters)
+            arguments (Input)
+                index (:, :) table;
+                filters (1,1) struct;
+            end
+            arguments (Output)
+                rows (:,1) double {mustBeInteger, mustBePositive}
+            end
+
+            err_id = "weathergrid:invalidFilter";
+            fields = string(fieldnames(filters));
+            notpresent = setdiff(fields, index.Properties.VariableNames);
+            if ~isempty(notpresent)
+                % NOTE: may be better to emit error here
+                warning(err_id, "Ignoring fields %s: not present in index", mat2str(notpresent));
+            end
+            fields = setdiff(fields, notpresent);
+
+            rows = true(height(index), 1);
+
+            for i_field = 1:length(fields)
+                field = fields(i_field);
+                filter = filters.(field);
+                if isa(filter, "function_handle")
+                    result = filter(index.(field));
+                    if ~islogical(result)
+                        error(err_id, "Filter <%s> returned outputs of type %s (%s expected)", ...
+                            func2str(filter), class(result), "logical");
+                    end
+                    if length(result) ~= length(rows)
+                        error(err_id, "Filter <%s> on field %s returned %d outputs (%d expected)", ...
+                            func2str(filter), field, numel(result), numel(rows))
+                    end
+                else
+                    result = matches(index.(field), filter);
+                end
+
+                rows = rows & result;
+            end
+            rows = find(rows);
         end
     end
 
@@ -481,47 +526,6 @@ classdef ncep < handle
         end
 
         % Search table for filters specified in structure
-        function [rows] = search(index, filters)
-            arguments (Input)
-                index (:, :) table;
-                filters (1,1) struct;
-            end
-            arguments (Output)
-                rows (:,1) double {mustBeInteger, mustBePositive}
-            end
-
-            err_id = "weathergrid:invalidFilter";
-            fields = string(fieldnames(filters));
-            notpresent = setdiff(fields, index.Properties.VariableNames);
-            if ~isempty(notpresent)
-                % NOTE: may be better to emit error here
-                warning(err_id, "Ignoring fields %s: not present in index", mat2str(notpresent));
-            end
-            fields = setdiff(fields, notpresent);
-
-            rows = true(height(index), 1);
-
-            for i_field = 1:length(fields)
-                field = fields(i_field);
-                filter = filters.(field);
-                if isa(filter, "function_handle")
-                    result = filter(index.(field));
-                    if ~islogical(result)
-                        error(err_id, "Filter <%s> returned outputs of type %s (%s expected)", ...
-                            func2str(filter), class(result), "logical");
-                    end
-                    if length(result) ~= length(rows)
-                        error(err_id, "Filter <%s> on field %s returned %d outputs (%d expected)", ...
-                            func2str(filter), field, numel(result), numel(rows))
-                    end
-                else
-                    result = matches(index.(field), filter);
-                end
-
-                rows = rows & result;
-            end
-            rows = find(rows);
-        end
 
         % Geographically crop planar or geographic raster reference, with
         % sane behavior for out-of-range or Infinite limits. Return the indices 
