@@ -1,6 +1,7 @@
 %% Baseline
 omen = openrocket("data/OMEN.ork");
 sim = omen.sims("MATLAB");
+site = launchsites("spaceport-america");
 
 baseline_flight_data = omen.simulate(sim, outputs = "ALL");
 
@@ -13,10 +14,13 @@ for i_mach = 1:height(baseline_drag_data)
         omen.aerodata3(fc);
 end
 
+[imag, rast] = flight_basemap(site.lat, site.lon, 1e3);
+
 figure(name = "Trajectory comparisons");
 traj_ax = axes;
 hold(traj_ax, "on");
 grid(traj_ax, "on");
+mapshow(imag, rast);
 plot3_openrocket(traj_ax, baseline_flight_data, LineWidth = 2, DisplayName = "Baseline");
 legend;
 
@@ -26,7 +30,6 @@ ncep.list
 disp("Available GFS output grids: ");
 ncep.list("gfs")
 % Atmospheric model
-site = launchsites("spaceport-america");
 times = datetime(2024, 06, 21, TimeZone = "MST") + hours([10 12]);
 launchtime = datetime(2024, 06, 21, 10, 21, 00, TimeZone = "MST");
 
