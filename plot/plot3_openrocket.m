@@ -1,4 +1,9 @@
 function gh = plot3_openrocket(varargin)
+    % Plot
+    % line = plot3_openrocket([ax, ]data, ...)
+    %   ax      ({gca} | Axes)  (Optional) Axes to target
+    %   data    (timetable)     Output of openrocket.get_data() or import_openrocket_csv()
+    %   ...     Additional arguments to plot ("-k", LineWidth=2, etc...)
 
     narginchk(1,Inf);
 
