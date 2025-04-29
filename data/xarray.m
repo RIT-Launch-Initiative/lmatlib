@@ -991,11 +991,12 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
                 values (1,:) double;
             end
 
-            axes = [axes{:}]
+            axes = [axes{:}];
             obj = obj.align(axes).sort(axes, "ascend");
             F = griddedInterpolant(obj.coordinates(1:length(axes)), obj.data, "linear", "nearest");
             result_data = F(values);
-            obj.data = reshape(result_data, size(result_data, length(axes)+1:ndims(result_data)));
+            new_size = size(result_data, length(axes)+1:ndims(result_data));
+            obj.data = reshape(result_data, [new_size 1]);
             obj.axes(1:length(axes)) = [];
             obj.coordinates(1:length(axes)) = [];
         end

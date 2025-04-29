@@ -1,3 +1,22 @@
+% Create atmospheric data table using a specific model, grid, and space-time
+% atmos = atmosphere(model, product, lat, lon, time, [Name, Value])
+% INPUTS
+%   model   (string)    NOAA model to pull from - use >>ncep.list()
+%   product (string)    Model output grid to pull from - use >>ncep.list(model)
+%   lat     (double)    Signed latitude, decimal degrees North
+%   lon     (double)    Signed lonitude, decimal degrees East
+% NAME-VALUE ARGUMENTS
+%   fields  ({["TMP", "HGT", "UGRD", "VGRD"]} | string)
+%           Data fields to pull, defaults to the typical wanted ones
+%   reftime ({NaT} | datetime)
+%           Reference time for forecast (time at which the forecast is generated)
+%           Should have time zone assigned for minimum ambiguity
+%           Rounds to the nearest model output cycle
+%   minpres ({-Inf} | double)
+%           Minimum pressure to reduce the number of layers (GRIB messages) that need to be read
+% OUTPUTS
+%   atmos   (table)     Table with columns ["PRES", fields] describing the
+%                       atmosphere profiles per pressure level, up to minpres
 function atmos = atmosphere(model, product, lat, lon, time, opts)
     arguments
         model (1,1) string;
@@ -25,8 +44,13 @@ function atmos = atmosphere(model, product, lat, lon, time, opts)
     filters.layer = regexpPattern(pressure_level_regex);
 
     % inventory has <xxx> mb layer codes, find them
-    messages = ref.search(ref(1).inventory, filters);
-    layers = unique(ref(1).inventory.layer(messages));
+    inv = ref(1).inventory;
+    messages = ref.search(inv, filters);
+    layers = unique(inv.layer(messages));
+    notpresent = setdiff(opts.fields, inv.field(messages));
+    if ~isempty(notpresent)
+        warning("Fields %s not present in inventory", mat2str(notpresent));
+    end
 
     % convert <xxx> mb to numbers and compare
     pressure_levels = str2double(extract(layers, digitsPattern));
@@ -34,10 +58,13 @@ function atmos = atmosphere(model, product, lat, lon, time, opts)
     
     data = ref.read_point(lat, lon, layer = layers_in_range, field = opts.fields);
 
-    % convert time axis to numeric (seconds since first time) so interp() works
-    epoch = data.time(1);
-    data.time = seconds(data.time - epoch);
-    data = interp(data, time = seconds(time - epoch));
+    % if the specified result is on-the-hour, size(data, "time") = 1 and the interpolation fails
+    if size(data, "time") > 1
+        % convert time axis to numeric (seconds since first time) so interp() works
+        epoch = data.time(1);
+        data.time = seconds(data.time - epoch);
+        data = interp(data, time = seconds(time - epoch));
+    end
     data.layer = str2double(extract(data.layer, digitsPattern));
     data = data.align(["layer", "field"]).sort("layer", "descend"); % layer should be column so it fits in a table
 

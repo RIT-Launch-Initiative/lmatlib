@@ -643,25 +643,25 @@ classdef (Sealed) openrocket < handle & matlab.mixin.Scalar
                 error("No 'openrocket.jar' (case-insensitive) found on static class path.")
             end
 
-            wb = waitbar(0, "Starting OpenRocket modules..");
+            % wb = waitbar(0, "Starting OpenRocket modules..");
             gui_module = net.sf.openrocket.startup.GuiModule();
-            waitbar(0.2, wb);
+            % waitbar(0.2, wb);
             plugin_module = net.sf.openrocket.plugin.PluginModule();
-            waitbar(0.4, wb)
+            % waitbar(0.4, wb)
             injector = com.google.inject.Guice.createInjector([gui_module, plugin_module]);
-            waitbar(0.6, wb)
+            % waitbar(0.6, wb)
             net.sf.openrocket.startup.Application.setInjector(injector);
-            waitbar(0.8, wb);
+            % waitbar(0.8, wb);
             gui_module.startLoader();
 
-            waitbar(0.9, wb);
+            % waitbar(0.9, wb);
             logger = org.slf4j.LoggerFactory.getLogger(...
                 ch.qos.logback.classic.Logger.ROOT_LOGGER_NAME);
             level = ch.qos.logback.classic.Level.ERROR;
             logger.setLevel(level);
 
-            waitbar(1, wb, "Done.");
-            close(wb);
+            % waitbar(1, wb, "Done.");
+            % close(wb);
             ret = true;
         end
 
@@ -742,7 +742,6 @@ classdef (Sealed) openrocket < handle & matlab.mixin.Scalar
             dict = dictionary(map.Key, units);
             dict("Stability margin") = "cal";
         end
-
 
         function ev = flight_event(name)
             arguments

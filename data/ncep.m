@@ -40,7 +40,6 @@ classdef ncep < handle
             ref.inventory = ncep.patch_index(ref.inventory);
         end
 
-
         function [data, crs] = read(refs, params)
             arguments
                 refs (1, :) ncep;
@@ -86,7 +85,8 @@ classdef ncep < handle
                 path = refs(i_time).local; 
 
                 start = tic;
-                fprintf("Reading from %s... ", path); 
+                [~, name, ext] = fileparts(path);
+                fprintf("Reading from %%tempdir%%/%s (%s)... ", name + ext, refs(i_time).cycle); 
                 for i_field = 1:nfields
                     field = output_fields(i_field);
 
@@ -290,6 +290,7 @@ classdef ncep < handle
                 error("Reference time must occur on or before valid time");
             end
             ref_day = dateshift(reftime, "start", "day");
+
             candidate_cycles = ref_day + ncep.list(model, product);
             i_cycle = find(candidate_cycles <= reftime, 1, "last");
             nearest_cycle = candidate_cycles(i_cycle);
@@ -316,6 +317,8 @@ classdef ncep < handle
                 product (1,1) string;
                 validtime (1,:) datetime {mustBeFinite, ncep.shouldHaveTimezone};
             end
+
+            validtime.TimeZone = "UTC";
 
             valid_day = dateshift(validtime, "start", "day");
             candidate_days = min(valid_day):days(1):max(valid_day);
@@ -443,7 +446,9 @@ classdef ncep < handle
             end
 
             % status output
-            fprintf("Located %d messages\n", length(messages));
+
+            [~, name, ext] = fileparts(ref.origin);
+            fprintf("Located %d messages on NOMADS at %s\n", length(messages), name + ext);
             data_file_id = fopen(ref.local, "a");
             if data_file_id < 0
                 error("ncep:cantwrite", "Unable to open local file for writing");

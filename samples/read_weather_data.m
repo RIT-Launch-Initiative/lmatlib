@@ -54,7 +54,7 @@ nam_wind = nam_ref.read_point(sam.lat, sam.lon, ...
 nam_wind = sort_pressure_levels(nam_wind);
 
 % paren-indexing into xarray returns another xarray
-nam_wind = nam_wind.index(time = 1).range(layer = [400 1000]).squeeze; 
+nam_wind = nam_wind.index(time = 1).range(layer = [400 1000]).align("layer"); 
 % pick first time point, pressure between 
 
 % read forecast from Global Forecast System
@@ -63,7 +63,7 @@ gfs_wind = gfs_ref.read_point(sam.lat, sam.lon, ...
     layer = digitsPattern + " mb", field = ["UGRD", "VGRD", "HGT", "TMP"]);
 gfs_wind = sort_pressure_levels(gfs_wind);
 
-gfs_wind = gfs_wind.index(time = 1).range(layer = [400 1000]);
+gfs_wind = gfs_wind.index(time = 1).range(layer = [400 1000]).align("layer");
 
 figure(name = "Forecast wind column for Spaceport America");
 layout = tiledlayout(1,3);

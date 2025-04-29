@@ -1,19 +1,16 @@
 clear; close all;
 
-run_sweep = false;
-run_monte = false;
-run_opt = false;
-run_atmos = true;
-run_wind = true;
-run_drag = true;
+run_sweep = true;
+run_monte = true;
+run_opt = true;
 
-otis_path = "data/OTIS.ork"; %pfullfile("samples", "data", "OTIS.ork");
+omen_path = "data/OMEN.ork"; %pfullfile("samples", "data", "OMEN.ork");
 
 %% Basic plots
-otis = openrocket(otis_path);
-sim = otis.sims(1); % get simulation by number
+omen = openrocket(omen_path);
+sim = omen.sims(1); % get simulation by number
 
-drogue = otis.component(name = "Streamer"); % get streamer 
+drogue = omen.component(name = "Streamer"); % get streamer 
 event = openrocket.get_deploy(drogue, sim); % get event for drogue chute
 event.setDeployDelay(3); % 3-second drogue delay
 
@@ -32,12 +29,12 @@ nexttile;
 plot_openrocket(data, "Stability margin", "Angle of attack", ...
     start_ev = "LAUNCHROD", end_ev = "APOGEE", labels = ["LAUNCHROD", "BURNOUT"]);
 
-
+drawnow; % so you get plots before waiting for the rest of this script to run
 %% Fin height sweep
 if run_sweep
-    otis = openrocket(otis_path);
-    sim = otis.sims("20MPH-SA");
-    fins = otis.component(class = "FinSet"); 
+    omen = openrocket(omen_path);
+    sim = omen.sims("MATLAB");
+    fins = omen.component(class = "FinSet"); 
     if ~isscalar(fins)
         error("Multiple fin sets found");
     end
@@ -53,16 +50,20 @@ if run_sweep
     % Refernce flight condition
     ref_mach = 0.3;
     ref_aoa = deg2rad(5);
-    ref_fcond = otis.flight_condition(ref_mach, ref_aoa);
+    ref_fcond = omen.flight_condition(ref_mach, ref_aoa);
 
-    for i = 1:length(heights)
-        fins.setHeight(heights(i));
+    parfor i_sim = 1:length(heights);
+    
+        pardoc = openrocket(omen_path);
+        parsimobj = pardoc.sims("MATLAB")
+        fins = pardoc.component(class = "FinSet"); 
+
+        fins.setHeight(heights(i_sim));
         
-        ssm_reference(i) = otis.stability("LAUNCH", ref_fcond);
+        % ssm_reference(i_sim) = pardoc.stability("LAUNCH", ref_fcond);
 
         % Simulate 
-        data = openrocket.simulate(sim, stop = seconds(3), outputs = "Stability margin"); 
-        % stop at 3 seconds to not simulate much after burnout - significant performance benefit
+        data = openrocket.simulate(parsimobj, outputs = "Stability margin"); 
 
         % Cut data to range of interest
         data_range = timerange(eventfilter("LAUNCHROD"), eventfilter("BURNOUT"), "openleft");
@@ -72,8 +73,8 @@ if run_sweep
         % event. The "openleft" option for TIMERANGE cuts the table to include the
         % point immediately after the LAUNCHROD event. 
 
-        ssm_launchrod(i) = data{1, "Stability margin"};
-        ssm_burnout(i) = data{end, "Stability margin"};
+        ssm_launchrod(i_sim) = data{1, "Stability margin"};
+        ssm_burnout(i_sim) = data{end, "Stability margin"};
     end
 
     figure(name = "Fin height sweep");
@@ -88,17 +89,18 @@ if run_sweep
 
     yregion([-Inf 1.5], FaceColor = [0.8 0.1 0.1], HandleVisibility = "off");
     yregion([4 Inf], FaceColor = [0.8 0.1 0.1], HandleVisibility = "off");
+    drawnow; % so you get plots before waiting for the rest of this script to run
 end
 
 %% Monte Carlo simulations
-if run_opt
+if run_monte
     n_sims = 20;
     launch_spread = 4;
     wind_speed_spread = 5;
     wind_angle_spread = 60;
 
-    otis = openrocket(otis_path);
-    sim = otis.sims("15MPH-SA");
+    omen = openrocket(omen_path);
+    sim = omen.sims("MATLAB");
     opts = sim.getOptions();
     opts.setWindTurbulenceIntensity(0.15);
     opts.setLaunchRodDirection(deg2rad(60));
@@ -133,126 +135,29 @@ end
 
 %% Adjustable weight optimization
 if run_opt
-    % Don't actually do this - we don't know any conditions to enough precision to
-    % make this number useful. But, it serves as an example.
-
-    otis = openrocket(otis_path);
-    sim = otis.sims("15MPH-SA");
-    weight_opt_cost = make_cost_function(otis, sim, "Adjustable stability weight");
+    omen = openrocket(omen_path);
+    sim = omen.sims("MATLAB");
+    opt_mass_name = "Mass Component";
+    apogee_target = 3048; % [m] 
+    apogee_tolerance = 1; % [m] stop sim when we are within this value of the desired apogee
 
     % see https://www.mathworks.com/help/optim/ug/output-function.html#f11454
-    stop_close_enough = @(~, optim_values, ~) optim_values.fval <= 0.1; % stop sim when we are within 0.1m
+    weight_opt_cost = make_cost_function(omen, sim, opt_mass_name, 3048);
+    stop_close_enough = @(~, optim_values, ~) optim_values.fval <= apogee_tolerance; 
     opts = optimset(Display = "iter", OutputFcn = stop_close_enough); 
     opt_weight = fminsearch(weight_opt_cost, 1.5, opts);
 
     % sim.getOptions().setWindTurbulenceIntensity(0);
-    otis.component(name = "Adjustable stability weight").setComponentMass(opt_weight);
+    omen.component(name = opt_mass_name).setComponentMass(opt_weight);
     data = openrocket.simulate(sim, outputs = "ALL");
 
     figure(name = "Optimized trajectory");
     plot_openrocket(data, "Altitude", "Vertical velocity", labels = ["BURNOUT", "APOGEE", "MAIN"]);
     title(sprintf("Stability mass optimized to %.2f kg", opt_weight));
+    drawnow; % so you get plots before waiting for the rest of this script to run
 end
 
-%% Custom Simulation Inputs
-
-% Baseline
-if run_atmos || run_wind || run_drag
-    otis = openrocket(otis_path);
-    sim = otis.sims("20MPH-SA");
-
-    baseline_flight_data = otis.simulate(sim, outputs = "ALL");
-
-    baseline_drag_data = table;
-    baseline_drag_data.MACH = (0:0.1:2)';
-
-    for i_mach = 1:height(baseline_drag_data)
-        fc = otis.flight_condition(baseline_drag_data.MACH(i_mach));
-        [~, baseline_drag_data.DRAG(i_mach), ~, ~, ~] = ...
-            otis.aerodata3(fc);
-    end
-    
-    figure(name = "Trajectory comparisons");
-    traj_ax = axes;
-    hold(traj_ax, "on");
-    grid(traj_ax, "on");
-    plot_trajectory(traj_ax, baseline_flight_data, LineWidth = 2, DisplayName = "Baseline");
-    legend;
-end
-
-% Atmospheric model
-if run_atmos
-    site = launchsites("spaceport-america");
-    times = datetime(2024, 06, 21, TimeZone = "MST") + hours([10 12]);
-    launchtime = datetime(2024, 06, 21, 10, 21, 00, TimeZone = "MST");
-    refs = ncep.anl("gfs", "pgrb2.1p00", times);
-    refs.attach("data");
-    atmos = atmosphere.from_ncep(refs, lats = site.lat + [-1 1], ...
-        lons = site.lon + [-1 1]);
-    ac = atmos.aircolumn(site.lat, site.lon, launchtime);
-    airdata = table;
-    airdata.HGT = ac.pick{"field", "HGT"};
-    airdata.PRES = 100*str2double(extract(ac.layer, digitsPattern));
-    airdata.TMP = ac.pick{"field", "TMP"} + 273.15;
-
-    atmos_flight_data = otis.simulate(sim, outputs = "ALL", atmos = airdata);
-    plot_trajectory(traj_ax, atmos_flight_data, DisplayName = "Custom atmosphere");
-end
-
-% Wind model
-if run_wind
-    site = launchsites("spaceport-america");
-    times = datetime(2024, 06, 21, TimeZone = "MST") + hours([10 12]);
-    launchtime = datetime(2024, 06, 21, 10, 21, 00, TimeZone = "MST");
-    refs = ncep.anl("gfs", "pgrb2.1p00", times);
-    refs.attach("data");
-    atmos = atmosphere.from_ncep(refs, lats = site.lat + [-1 1], ...
-        lons = site.lon + [-1 1]);
-    ac = atmos.aircolumn(site.lat, site.lon, launchtime);
-    winddata = table;
-    winddata.HGT = ac.pick{"field", "HGT"};
-    winddata.UGRD = ac.pick{"field", "UGRD"};
-    winddata.VGRD = ac.pick{"field", "VGRD"};
-
-    wind_flight_data = otis.simulate(sim, outputs = "ALL", wind = winddata);
-    plot_trajectory(traj_ax, wind_flight_data, DisplayName = "Custom wind");
-end
-
-% Drag model
-if run_drag
-    models = import_rasaero_aerodata("data/OMEN_RA_Aerodata.csv");
-    drag_data = table;
-    drag_data.MACH = models.mach;
-    drag_data.DRAG = models.pick{"field", "CD", "aoa", 0};
-    
-    drag_flight_data = otis.simulate(sim, outputs = "ALL", drag = drag_data);
-
-    plot_trajectory(traj_ax, drag_flight_data, DisplayName = "Modified drag");
-
-    figure(name = "Drag lookup comparison");
-    hold on; grid on;
-    plot(baseline_drag_data.MACH, baseline_drag_data.DRAG, ...
-        LineWidth = 2, DisplayName = "OpenRocket");
-    plot(drag_data.MACH, drag_data.DRAG, DisplayName = "RasAero II");
-    xlabel("Mach number");
-    ylabel("Drag coefficient");
-    legend;
-    xlim([0 2]);
-
-    figure(name = "Drag history")
-    hold on; grid on;
-    plot(baseline_flight_data.Time, baseline_flight_data.("Drag force"), ...
-        LineWidth = 2, DisplayName = "OpenRocket");
-    plot(drag_flight_data.Time, drag_flight_data.("Drag force"), ...
-        DisplayName = "RasAero II");
-    xlabel("Time");
-    ylabel("Drag coefficient");
-    legend;
-
-end
-
-
-function func = make_cost_function(doc, sim, tuned_name)
+function func = make_cost_function(doc, sim, tuned_name, apogee_target)
     % All of these variables need to be pre-populated in the cost function, but
     % can't be arguments They can be made global, or the cost function is
     % nested within a function in which the variables are evaluated once.
@@ -260,28 +165,14 @@ function func = make_cost_function(doc, sim, tuned_name)
     % https://www.mathworks.com/help/matlab/math/parameterizing-functions.html
 
     sim.getOptions().setWindTurbulenceIntensity(0);
-
     tuned_mass = doc.component(name = tuned_name);
-    apogee_target = 3048;
-    
     func = @cost;
     function f = cost(x)
         mass = x(1);
         tuned_mass.setComponentMass(mass);
 
-        data = doc.simulate(sim, stop = "apogee", output = "Altitude");
+        data = doc.simulate(sim, outputs = "Altitude");
         apogee_error = data{eventfilter("APOGEE"), "Altitude"} - apogee_target;
         f = abs(apogee_error);
     end        
-end
-
-function ph = plot_trajectory(ax, flight_data, varargin)
-    ph = plot3(ax, flight_data.("Position East of launch"), ....
-        flight_data.("Position North of launch"), ...
-        flight_data.Altitude, varargin{:});
-
-    xlabel(ax, "East [m]");
-    ylabel(ax, "North [m]");
-    zlabel(ax, "Altitude [m]");
-    % daspect([1 1 1]);
 end
