@@ -14,7 +14,7 @@ for i_mach = 1:height(baseline_drag_data)
         omen.aerodata3(fc);
 end
 
-[imag, rast] = flight_basemap(site.lat, site.lon, 1e3);
+[imag, rast] = flight_basemap(site.lat, site.lon, 2e3);
 
 figure(name = "Trajectory comparisons");
 traj_ax = axes;
