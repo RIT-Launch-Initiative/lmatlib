@@ -30,6 +30,7 @@ plot_openrocket(data, "Stability margin", "Angle of attack", ...
     start_ev = "LAUNCHROD", end_ev = "APOGEE", labels = ["LAUNCHROD", "BURNOUT"]);
 
 drawnow; % so you get plots before waiting for the rest of this script to run
+
 %% Fin height sweep
 if run_sweep
     omen = openrocket(omen_path);
@@ -52,18 +53,13 @@ if run_sweep
     ref_aoa = deg2rad(5);
     ref_fcond = omen.flight_condition(ref_mach, ref_aoa);
 
-    parfor i_sim = 1:length(heights);
-    
-        pardoc = openrocket(omen_path);
-        parsimobj = pardoc.sims("MATLAB")
-        fins = pardoc.component(class = "FinSet"); 
-
+    for i_sim = 1:length(heights);
         fins.setHeight(heights(i_sim));
         
-        % ssm_reference(i_sim) = pardoc.stability("LAUNCH", ref_fcond);
+        ssm_reference(i_sim) = omen.stability("LAUNCH", ref_fcond);
 
         % Simulate 
-        data = openrocket.simulate(parsimobj, outputs = "Stability margin"); 
+        data = openrocket.simulate(sim, outputs = "Stability margin"); 
 
         % Cut data to range of interest
         data_range = timerange(eventfilter("LAUNCHROD"), eventfilter("BURNOUT"), "openleft");
