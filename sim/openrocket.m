@@ -163,7 +163,7 @@ classdef (Sealed) openrocket < handle & matlab.mixin.Scalar
             % isn't, MATLAB will emit an inane error from a random Toolbox with
             % a simulate() function instead of an error related to the Java object.
 
-            import net.sf.openrocket.simulation.FlightEvent;
+            % import net.sf.openrocket.simulation.FlightEvent;
             listener_class = "net.sf.openrocket.simulation.listeners.SimulationListener"; 
             extension_class = "net.sf.openrocket.simulation.extension.SimulationExtension";
             
@@ -500,6 +500,117 @@ classdef (Sealed) openrocket < handle & matlab.mixin.Scalar
             end
         end
 
+        function data = add_indicated(~, data)
+            % Add flight computer indicated altitude as variable "Indicated altitude"
+            % data = obj.add_indicated(data)
+            %   data    (timetable)     Output with column "Air pressure"
+            arguments
+                ~
+                data timetable {openrocket.mustHaveCols(data, "Air pressure")};
+            end
+
+            upress = data.Properties.VariableUnits{"Air pressure"};
+            press = data.("Air pressure");
+            if ismember("Altitude", string(data.Properties.VariableNames));
+                uhgt = data.Properties.VariableUnits{"Altitude"};
+            else
+                uhgt = "m";
+                warning("'Altitude' not presesnt or is unitless, assuming 'm'");
+            end
+
+            if upress == ""
+                warning("Pressure variable does not have assigned units. Assuming Pa");
+                upress = "Pa";
+            end
+
+            switch upress
+                case "Pa"
+                    P_mbar = press ./ 100;
+                case "kPa"
+                    P_mbar = press .* 10;
+                case "mbar"
+                    P_mbar = press;
+                case "psi"
+                    P_mbar = 68.94757293168361 .* press;
+                otherwise
+                    error("Unrecognized pressure unit '%s'", upress);
+            end
+
+            hgt_m = (1 - (P_mbar ./ 1013.25).^(0.190284)) .* 145366.45 * 0.3048;
+            alt_m = hgt_m - hgt_m(1);
+
+            % Convert output
+            switch uhgt
+                case "m"
+                    alt = alt_m;
+                case "km"
+                    alt = alt_m ./ 1000;
+                case "ft"
+                    alt = alt_m .* 3.280839895013123;
+                case "mi"
+                    alt = alt_m .* 6.213711922373339e-04;
+                otherwise
+                    error("Unrecognized height unit '%s'", uhgt);
+            end
+
+            data.("Indicated altitude") = alt;
+            data.Properties.VariableUnits{"Indicated altitude"} = uhgt;
+        end
+
+        function data = add_flutter(obj, data, modulus)
+            % Add fin flutter velocity to simulation output as variable "Flutter velocity"
+            % data = obj.add_flutter(data, modulus)
+            %   data        (timetable)     Output with columns "Air pressure" and "Speed of sound"
+            %   modulus     (double)        [Pa] fin shear modulus
+            %
+            % Uses flutter velocity formula from Apogee Peak of Flight 615
+
+            arguments
+                obj openrocket;
+                data timetable {openrocket.mustHaveCols(data, ...
+                    ["Air pressure", "Speed of sound"])}
+                modulus (1,1) double {mustBePositive};
+            end
+            
+            fins = obj.component(class = "TrapezoidFinSet");
+            
+            if isempty(fins)
+                error("No trapezoidal fins found")
+            elseif ~isscalar(fins)
+                error("Multiple trapezoidal fin sets found")
+            end
+            % Calculations lifted from RIT-Launch-Initiative/finoptimization,
+            % but applied across all times individually instead of just max. velocity
+            
+            % Retrieve fin dimensions
+            t = fins.getThickness();
+            Ls = fins.getSweep();
+            Lt = fins.getTipChord();
+            Lr = fins.getRootChord();
+            h = fins.getHeight();
+
+            % Constants
+            P0 = 101325.3; % [Pa] Standard pressure
+            k = 1.4; % [-] Specific heat ratio for air
+            Cm = 24; % [-] Martins constant
+            
+            Cx = ((2 * Ls * Lt) + (Lt^2) + (Lr * Ls) + (Lt * Lr) + (Lr^2))/(3 * (Lt+Lr));
+            eps = (Cx/Lr) - 0.25;
+            Dc = (Cm * k * eps * P0)/(pi); % [Pa] "Denominator constant"
+            lambda = Lt/Lr; % [-] Taper ratio
+            A = h * ((Lt + Lr)/2); % [m^2] Fin area
+            Ar = (h^2)/A; % [-] Aspect ratio
+
+            P = data.("Air pressure");
+            c = data.("Speed of sound");
+            v_flut = c .* sqrt(modulus ./ ...
+                ( ((Dc*Ar^3)/((t/Lr)^3 * (Ar + 2))) .* ((lambda + 1)/2) .* (P/P0) ));
+            data.("Flutter velocity") = v_flut;
+
+
+            data.Properties.VariableUnits{"Flutter velocity"} = ...
+                data.Properties.VariableUnits{"Speed of sound"};
+        end
     end
 
 %% AERODYNAMIC CALCULATIONS
@@ -763,7 +874,7 @@ classdef (Sealed) openrocket < handle & matlab.mixin.Scalar
             % slight speed improvment over <list = double(toArray(jarr))>;
         end
 
-        function mustBeA(input, classname, prefix)
+        function tf = mustBeA(input, classname, prefix)
             % Validate that the input is or inherits from the specified class name 
             % Behaves like <mustBeA>, but prepends net.sf.openrocket 
             % not necessary for MATLAB types, which support direct validation
@@ -773,6 +884,7 @@ classdef (Sealed) openrocket < handle & matlab.mixin.Scalar
                 prefix (1,1) string = "";
             end
             fullname = "net.sf.openrocket." + classname;
+            tf = true;
             if ~isa(input, fullname)
                 ME = MException("openrocket:invalid_type", ...
                     sprintf("\n%sExpected %s\nGot %s", prefix, fullname, class(input)));
@@ -782,7 +894,7 @@ classdef (Sealed) openrocket < handle & matlab.mixin.Scalar
 
         function mustHaveCols(input, cols)
             arguments
-                input table;
+                input;
                 cols (1,:) string;
             end
 
