@@ -27,8 +27,20 @@ function atmos = atmosphere(model, product, lat, lon, time, opts)
         opts.fields (1,:) string = ["TMP", "HGT", "UGRD", "VGRD"];
         opts.reftime (1,1) datetime = missing;
         opts.minpres (1,1) double = -Inf;
+        opts.cache (1,1) string = missing;
     end
     
+    if ~ismissing(opts.cache)
+        mat = matfile(opts.cache, Writable = true);
+        cache_key = keyHash({model, product, lat, lon, time, ...
+            opts.fields, opts.reftime, opts.minpres});
+        cache_name = key2name(cache_key);
+        if ~isempty(whos(mat, cache_name))
+            atmos = mat.(cache_name);
+            return;
+        end
+    end
+
     % Magic values
     Pa_per_mbar = 100;
     pressure_level_regex = "^\d+ mb$";
@@ -70,4 +82,12 @@ function atmos = atmosphere(model, product, lat, lon, time, opts)
 
     atmos = array2table([Pa_per_mbar * data.layer, double(data)], ...
         VariableNames = ["PRES", data.field']);
+
+    if ~ismissing(opts.cache)
+        mat.(cache_name) = atmos;
+    end
+end
+
+function name = key2name(key)
+    name = sprintf("data_%ud", key);
 end
