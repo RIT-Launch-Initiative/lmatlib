@@ -367,6 +367,7 @@ classdef ncep < handle
             jacob = deg2rad(jacob) .* radius .* [cosd(lat); 1];
         end
 
+        % Search table for filters specified in structure
         function [rows] = search(index, filters)
             arguments (Input)
                 index (:, :) table;
@@ -448,7 +449,7 @@ classdef ncep < handle
             % status output
 
             [~, name, ext] = fileparts(ref.origin);
-            fprintf("Located %d messages on NOMADS at %s\n", length(messages), name + ext);
+            fprintf("Located %d messages on S3 at %s\n", length(messages), name + ext);
             data_file_id = fopen(ref.local, "a");
             if data_file_id < 0
                 error("ncep:cantwrite", "Unable to open local file for writing");
@@ -530,7 +531,6 @@ classdef ncep < handle
             tbl = addvars(tbl, band, After = "message");
         end
 
-        % Search table for filters specified in structure
 
         % Geographically crop planar or geographic raster reference, with
         % sane behavior for out-of-range or Infinite limits. Return the indices 
@@ -635,7 +635,6 @@ classdef ncep < handle
             end
         end
 
-
         % Calculate engineering-unit file sizes (k/M/G/T...)
         function [nums, units] = format_filesize(sizes)
             % [nums, units] = format_filesize(sizes)
@@ -729,7 +728,6 @@ classdef ncep < handle
                     "datetime input has no assigned time zone, defaulting to UTC");
             end
         end
-
 
         % convert (names, values) Repeating arguments into a structure
         function stru = namevalue2struct(names, values)
