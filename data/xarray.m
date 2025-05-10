@@ -830,7 +830,7 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
                 if any(~iseq)
                     mex = MException("xarray:mismatch", ...
                         "Common axes %s are not equal", ...
-                        mat2str(common_names(~iseq)));
+                        mat2str(common(~iseq)));
                     throwAsCaller(mex);
                 end
 
@@ -917,6 +917,9 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
         function obj = ne(a, b)
             obj = xarray.arithmetic(@ne, a, b);
         end
+        function obj = atan2(a, b)
+            obj = xarray.arithmetic(@atan2, a, b);
+        end
 
 %% Summarizing functions
         function obj = mean(obj, varargin)
@@ -956,6 +959,24 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
         end
         function obj = log(obj)
             obj.data = log(obj.data);
+        end
+        function obj = sin(obj)
+            obj.data = sin(obj.data);
+        end
+        function obj = cos(obj)
+            obj.data = cos(obj.data);
+        end
+        function obj = tan(obj)
+            obj.data = tan(obj.data);
+        end
+        function obj = asin(obj)
+            obj.data = asin(obj.data);
+        end
+        function obj = acos(obj)
+            obj.data = acos(obj.data);
+        end
+        function obj = atan(obj)
+            obj.data = atan(obj.data);
         end
 
         function obj = isnan(obj)
