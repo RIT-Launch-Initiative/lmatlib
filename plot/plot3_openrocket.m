@@ -29,7 +29,7 @@ function gh = plot3_openrocket(varargin)
             data.Properties.VariableUnits{"Position East of launch"});
     end
     if ax.YLabel.String == ""
-        ax.XLabel.String = sprintf("North [%s]", ...
+        ax.YLabel.String = sprintf("North [%s]", ...
             data.Properties.VariableUnits{"Position North of launch"});
     end
     if ax.ZLabel.String == ""
