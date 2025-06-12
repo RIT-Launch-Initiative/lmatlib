@@ -409,8 +409,8 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
             assert(isv, "<xarray> input to <plot> must have exactly one non-scalar dimension");
 
             gh = plot(obj.coordinates{dim}, obj.data(:), varargin{:});
-            if gh.Parent.YLabel.String == ""
-                gh.Parent.YLabel.String = obj.axes(dim);
+            if gh.Parent.XLabel.String == ""
+                gh.Parent.XLabel.String = obj.axes(dim);
             end
         end
 
@@ -473,36 +473,11 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
             axis(ax, "tight");
         end
 
-        % function gh = surf(obj, scale, varargin)
-        %     arguments
-        %         obj xarray;
-        %     end
-        %     arguments (Repeating)
-        %         varargin;
-        %     end
-        %
-        %     [ism, dim] = ismatrix(obj);
-        %     assert(ism, "Data input must be a matrix");
-        %     obj = obj.align(dim);
-        %     gh = surf(obj.coordinates{2}, obj.coordinates{1}, data, varargin{:});
-        %
-        %     ax = gh.Parent;
-        %
-        %     if ax.XLabel.String == ""
-        %         ax.XLabel.String = obj.axes(2);
-        %     end
-        %     if ax.YLabel.String == ""
-        %         ax.YLabel.String = obj.axes(1);
-        %     end
-        %     if ax.ZLabel.String == ""
-        %         ax.ZLabel.String = z_label;
-        %     end
-        %
-        %     colormap(ax, "bone");
-        %     cb = colorbar(ax);
-        %     cb.Label.String = z_label;
-        %     axis(ax, "tight");
-        % end
+        function gh = contour(obj, opts)
+        end
+
+        function gh = contourf(obj, opts)
+        end
     end
 
     methods (Access = protected)

@@ -73,6 +73,7 @@ function atmos = atmosphere(model, product, lat, lon, time, opts)
     % if the specified result is on-the-hour, size(data, "time") = 1 and the interpolation fails
     if size(data, "time") > 1
         % convert time axis to numeric (seconds since first time) so interp() works
+        time.TimeZone = epoch.TimeZone;
         epoch = data.time(1);
         data.time = seconds(data.time - epoch);
         data = interp(data, time = seconds(time - epoch));

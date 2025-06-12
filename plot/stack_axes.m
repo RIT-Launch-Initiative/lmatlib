@@ -24,8 +24,8 @@ function stack_axes(layout)
             ax = nexttile(layout, n * (col-1) + row);
 
             % get rid of redundant texxt
-            xticklabels(ax, {});
-            xticklabels(ax, "manual");
+            % xticklabels(ax, {});
+            % xticklabels(ax, "manual");
             xlabel(ax, "");
             xsecondarylabel(ax, "");
 

@@ -27,15 +27,29 @@ classdef ncep < handle
             cycle_day = dateshift(cycle, "start", "day");
             cycle_time = cycle - cycle_day;
 
-            [~, source] = ncep.list(model, product, cycle_time, depth);
+            [~, sources] = ncep.list(model, product, cycle_time, depth);
             ref.model = model;
             ref.product = product;
             ref.cycle = cycle;
             ref.depth = depth;
 
-            ref.origin = ncep.sprintnf(source, ...
-                product = ref.product, cycle = ref.cycle.Hour, fcst = hours(ref.depth), ...
-                year = ref.cycle.Year, month = ref.cycle.Month, day = ref.cycle.Day);
+            % go through sources until a forecast is found
+            for i_src = 1:length(sources)
+                candidate_origin = ncep.sprintnf(sources(i_src), ...
+                    product = ref.product, cycle = ref.cycle.Hour, fcst = hours(ref.depth), ...
+                    year = ref.cycle.Year, month = ref.cycle.Month, day = ref.cycle.Day);
+                result = dir(candidate_origin + ".idx");
+
+                if isscalar(result)
+                    ref.origin = candidate_origin;
+                    break;
+                end
+            end
+            % couldn't find it
+            if ref.origin == ""
+                error("Unable to locate forecast file");
+            end
+            % assign everything
             ref.inventory = ncep.read_ncep_index(ref.origin + ".idx");
             ref.inventory = ncep.patch_index(ref.inventory);
         end
@@ -135,7 +149,6 @@ classdef ncep < handle
 
             [grid_data, crs] = refs.read(lats = lat + [-1 1], lons = lon + [-1 1], ...
                 field = params.field, layer = params.layer);
-            
 
             sample_values = ncep.latlon2coords(crs, lat, lon);
             sample_args = namedargs2cell(sample_values);
@@ -145,7 +158,7 @@ classdef ncep < handle
                 uv = data.align("field").pick{"field", ["UGRD", "VGRD"]};
 
                 jacob = ncep.projjacob(crs, "geographic", lat, lon);
-                jacob = jacob ./ vecnorm(jacob, 2, 1);
+                % jacob = jacob ./ vecnorm(jacob, 2, 1);
 
                 winds = pagemtimes(jacob, uv);
 
@@ -187,17 +200,20 @@ classdef ncep < handle
             switch model
                 case "gfs"
                     valid_products = ["pgrb2.1p00", "pgrb2.0p50", "pgrb2.0p25"];
-                    sources = "https://noaa-gfs-bdp-pds.s3.amazonaws.com/" + ...
+                    sources = ["https://nomads.ncep.noaa.gov/pub/data/nccf/com/gfs/prod/";
+                        "https://noaa-gfs-bdp-pds.s3.amazonaws.com/"] + ...
                         "gfs.%year$04d%month$02d%day$02d/%cycle$02d/atmos/" + ...
                         "gfs.t%cycle$02dz.%product$s.f%fcst$03d";
                 case "nam"
                     valid_products = ["awphys", "conusnest.hiresf"];
-                    sources = "https://noaa-nam-pds.s3.amazonaws.com/" + ...
+                    sources = ["https://nomads.ncep.noaa.gov/pub/data/nccf/com/nam/prod/";
+                        "https://noaa-nam-pds.s3.amazonaws.com/" ]+ ...
                         "nam.%year$04d%month$02d%day$02d/" + ...
                         "nam.t%cycle$02dz.%product$s%fcst$02d.tm00.grib2";
                 case "hrrr"
                     valid_products = "wrfprsf";
-                    sources = "https://noaa-hrrr-bdp-pds.s3.amazonaws.com/" + ...
+                    sources = ["https://nomads.ncep.noaa.gov/pub/data/nccf/com/hrrr/prod/";
+                        "https://noaa-hrrr-bdp-pds.s3.amazonaws.com/"] + ...
                         "hrrr.%year$04d%month$02d%day$02d/conus/" + ...
                         "hrrr.t%cycle$02dz.%product$s%fcst$02d.grib2";
                 otherwise
@@ -448,8 +464,8 @@ classdef ncep < handle
 
             % status output
 
-            [~, name, ext] = fileparts(ref.origin);
-            fprintf("Located %d messages on S3 at %s\n", length(messages), name + ext);
+            % [~, name, ext] = fileparts(ref.origin);
+            fprintf("Located %d messages at %s\n", length(messages), ref.origin);
             data_file_id = fopen(ref.local, "a");
             if data_file_id < 0
                 error("ncep:cantwrite", "Unable to open local file for writing");
