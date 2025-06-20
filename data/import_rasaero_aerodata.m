@@ -1,21 +1,17 @@
-%% lookups = import_rasaero_table(path, format = "grid")
-% Import aerodynamic data from RasAero
-% INPUTS
-%   path:   path to .csv, .xlsx, or other table file
-%   format: (optional) format of output structure (default: grid)
-% OUTPUTS
-%   lookups: structure with following fields /
-%       Ma:     mach number values
-%       alpha:  angle of attack values
-%   + One field for each additonal variable in the table (CD, CN, CA, ...):
-%       For "grid" format, this is an length(Ma) by length(alpha) matrix with
-%       this variable's lookup values.
-%       For "terp" format, this is a griddedInterpolant object that can be
-%       queried with CD(Ma, alpha).
+%% Import aerodynamic data from RasAero 
+% data = import_rasaero_table(path)
+% Inputs
+%   path    (string) path to .csv output from RasAero II
+% Outputs
+%   data    (xarray) xarray defining drag data, with axes ["mach", "aoa", "field"]
+%                    "field" is the column name in the .csv table output
 
 function aerodata = import_rasaero_aerodata(path)
-    arguments
+    arguments (Input)
         path (1,1) string;
+    end
+    arguments (Output)
+        aerodata (:, :, :) xarray {mustHaveAxes(aerodata, ["mach", "aoa", "field"])};
     end
     data = readtable(path, VariableNamingRule = "preserve");
     names = string(data.Properties.VariableNames);

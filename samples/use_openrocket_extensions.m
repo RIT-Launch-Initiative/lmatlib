@@ -53,6 +53,7 @@ models = import_rasaero_aerodata("data/OMEN_RA_Aerodata.csv");
 drag_data = table;
 drag_data.MACH = models.mach;
 drag_data.DRAG = models.pick{"field", "CD", "aoa", 0}; % select raw values from xarray
+drag_data.MACH(1) = 0; % need a data point at 0, otherwise the simulation returns a bunch of NaNs
 
 drag_flight_data = omen.simulate(sim, outputs = "ALL", drag = drag_data);
 
