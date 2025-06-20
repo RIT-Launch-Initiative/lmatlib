@@ -337,7 +337,7 @@ classdef ncep < handle
             validtime.TimeZone = "UTC";
 
             valid_day = dateshift(validtime, "start", "day");
-            candidate_days = min(valid_day):days(1):max(valid_day);
+            candidate_days = min(valid_day):days(1):(max(valid_day) + 1);
             cycles = ncep.list(model, product);
             candidate_datetimes = candidate_days + cycles(:); 
             % days is row, cyces is column - this becomes a matrix with all sums
