@@ -5,16 +5,16 @@ clear; close all;
 
 %% Flight data import
 SL = 1401; % [m] Ground level above sea level
-openrocket = import_openrocket_csv("data/OMEN_OR_Output.csv");
-openrocket.ASL = SL + openrocket.("Altitude");
-openrocket.Properties.VariableUnits("ASL") = "m";
+orkdata = import_openrocket_csv("data/OMEN_OR_Output.csv");
+orkdata.ASL = SL + orkdata.("Altitude");
+orkdata.Properties.VariableUnits("ASL") = "m";
 
 flight = timerange(eventfilter("LAUNCH"), eventfilter("APOGEE"), "closed");
-openrocket = openrocket(flight, :);
-burnout = openrocket(eventfilter("BURNOUT"), :);
+orkdata = orkdata(flight, :);
+burnout = orkdata(eventfilter("BURNOUT"), :);
 
 % Simulation settings
-% Assign every parameter to a single structure to use with struct2input() later
+% Assign every parameter to a single structure to use with structs2inputs() later
 params.t_0 = seconds(burnout.Time);
 params.dt = 0.01;
 params.t_f = 40;
@@ -30,7 +30,7 @@ params.A_ref = (1e-2)^2 * (burnout.("Reference area")); % [m^2] reference area (
 params.M_dry = burnout.Mass; % [kg]
 
 % C_D lookup table from OR flight
-C_D_lookup = openrocket(:, ["Mach number", "Drag coefficient"]);
+C_D_lookup = orkdata(:, ["Mach number", "Drag coefficient"]);
 C_D_lookup = sortrows(C_D_lookup, "Mach number", "ascend"); % Sort ascending by Mach number 
 params.C_D_lookup = C_D_lookup;
 
@@ -46,9 +46,9 @@ disp(cases);
 
 %% Run simulation cases
 slx_name = "sim_2dof";
-simin = struct2input(slx_name, params); % Put constants into simulation input
+simin = structs2inputs(slx_name, params); % Put constants into simulation input
 simins = table2inputs(simin, cases); % Create input array
-simouts = sim(simins, ShowProgress = "on"); % simulate using input array
+simouts = sim(simins, ShowProgress = "on", UseFastRestart = "on"); % simulate using input array
 
 % Process each output
 for si = 1:length(simouts)
@@ -66,7 +66,7 @@ disp(cases);
 figure(name = "Airbrake performance");
 tiledlayout(2,1);
 
-nexttile;
+nexttile; hold on; grid on;
 for ci = 1:height(cases)
     output = cases.output{ci};
     line_name = sprintf("L = %.f mm", 1e3 * cases.L_brake(ci));
@@ -77,7 +77,7 @@ ylabel("Altitude [m AGL]");
 xlabel("Time");
 legend(Location = "best");
 
-nexttile;
+nexttile; hold on; grid on;
 plot(cases.L_brake * 1e3, cases.apogee - SL, "^k"); % convert M to mm, ASL to AGL
 yline(3048, "--k", "10k Target", HandleVisibility = "off"); % so it doesn't show up on legend
 ylabel("Apogee [m AGL]");
