@@ -11,18 +11,43 @@ samples/  - usage examples
 
 ## How to download
 
-Options:
-
-* (Recommended) Click `New->Project->From Git` and link to the repository (the last part should be `lmatlib`, with no `/tree/main`). This pulls all required files and lets you pull new changes as they are published.
-* Download the files you need into a folder on your MATLAB path
-* Download an archive of the entire repository
+Click `New->Project->From Git` and link to the repository (the last part should be `lmatlib`, with no `/tree/main`). This pulls all required files and lets you pull new changes as they are published.
 
 ## How to use
 
-Options:
+If you only want to run `samples`, just open the project file `Lmatlib.prj`.
 
-* (Recommended) [Create a MATLAB Project](https://www.mathworks.com/help/matlab/matlab_prog/create-projects.html) 
-and [reference](https://www.mathworks.com/help/simulink/ug/add-or-remove-a-reference-to-another-project.html) `lmatlib`.
-* Add the folders you need into your MATLAB path using 
-[`addpath`](https://www.mathworks.com/help/matlab/ref/addpath.html)
-* (If you only want to run `samples`) Open the project file (`Lmatlib.prj`).
+If you want to use this as part of a different project, [Create a MATLAB Project](https://www.mathworks.com/help/matlab/matlab_prog/create-projects.html) under a common folder with `lmatlib`, then create a [*relative* reference](https://www.mathworks.com/help/simulink/ug/add-or-remove-a-reference-to-another-project.html) `lmatlib`. If projects are always created in this way, there only needs to be one `lmatlib` on your system that every other project references. The resulting folder structure should look like this:
+```
+<Common_folder_name>/
+   <new-project>/ 
+        <new-project-file>.prj
+        [stuff]
+   lmatlib/
+        Lmatlib.prj
+        [stuff]
+```
+
+
+## Contribution
+
+Help line format---replace text inside and including angle brackets `<>`
+```
+%% <One-liner description>
+% [<output1>, <output2>] = <function name>(<input1>, <input2>, <name1 = value1>, <name2 = value2>)
+% Inputs
+%   <input1>     (<data type(s) or allowed values>)  description
+%   <input2>     (<data type(s) or allowed values>)  description
+% <Name-value inputs, if present -- stuff like DisplayName = "blarg">
+%   <name1>      (<data type(s) or allowed values>)  description
+%   <name2>      (<data type(s) or allowed values>)  description
+% Outputs
+%   <output1>    (<data type(s) or allowed values>)  description
+%   <output2>    (<data type(s) or allowed values>)  description
+%
+% EXAMPLES
+% % no name-value arguments behaves one way
+% [a, b] = func(in1, in2)
+% % 
+% 
+```
