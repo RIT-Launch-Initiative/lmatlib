@@ -1,4 +1,10 @@
 function info = launchsites(launchsite)
+    %% Retrieve launch site information as structure
+    % info = launchsites(launchsite)
+    % Inputs
+    %   launchsite (string: "spaceport-america" | "spaceport-midland" | "urrg" | "mars")
+    % Outputs
+    %   info        (struct) with fields .lat, .lon, .alt
     siteinfo = dictionary;
 
     siteinfo("spaceport-america") = struct(lat = 32.94012563817728, lon = -106.91165732518579, alt = 1381);
