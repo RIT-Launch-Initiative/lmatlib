@@ -11,6 +11,16 @@ classdef ncep < handle
 
     methods
         function ref = ncep(model, product, cycle, depth)
+            %% Create a data product reference object
+            % ref = ncep(model, product, cycle, depth)
+            % Inputs
+            %   model   (string)    Model code (see ncep.list)
+            %   product (string)    Product code (see ncep.list(model))
+            %   cycle   (datetime)  Model publishing cycle (see ncep.list(model, product))
+            %   depth   (duration)  Data is valid for cycle + depth (see ncep.list(model, product, cycle))
+            % Outputs
+            %   ref     (ncep)      Referencing object, if the .grib file URL can be located
+            %                       Use .inventory or .read from here
             arguments
                 model (1,1) string;
                 product (1,1) string;
@@ -55,6 +65,20 @@ classdef ncep < handle
         end
 
         function [data, crs] = read(refs, params)
+            %% Read data from remote .grib2 file
+            % [data, crs] = ncep.read(refs[, Name, Value]);
+            % Inputs
+            %   refs    (ncep)  [list of] referencing objects
+            % Name-value inputs
+            %   lats    (double) (Optional) [min max] latitude range - defaults to [-Inf Inf]
+            %   lons    (double) (Optional) [min max] longitude range - defaults to [-Inf Inf]
+            %   field   (string) String pattern or exact string identifying the
+            %                   "field" column of .inventory()
+            %   layer   (string) String pattern or exact string identifying the
+            %                   "layer" column of .inv
+            % Outputs
+            %   data    (xarray) Output grid
+            %   crs     (projcrs | geocrs)  Coordinate reference system
             arguments
                 refs (1, :) ncep;
                 params.lats (1,2) double = [-Inf Inf];
@@ -63,6 +87,9 @@ classdef ncep < handle
                 params.layer (1, :) pattern = wildcardPattern;
             end
 
+            % using ncep.strip() because we will later use (params) as a struct
+            % in `ncep.search` and can't have fields not present in the
+            % inventory
             [params, lats] = ncep.strip(params, "lats");
             [params, lons] = ncep.strip(params, "lons");
             for i_ref = 1:length(refs)
@@ -94,13 +121,16 @@ classdef ncep < handle
             data = xarray(NaN(nrows, ncols, ntimes, nlayers, nfields, "single"), ...
                 axes{:}, time = times, layer = output_layers, field = output_fields);
 
+            % Read data
             for i_time = 1:ntimes
                 inventory = refs(i_time).inventory;
                 path = refs(i_time).local; 
 
                 start = tic;
                 [~, name, ext] = fileparts(path);
+
                 fprintf("Reading from %%tempdir%%/%s (%s)... ", name + ext, refs(i_time).cycle); 
+
                 for i_field = 1:nfields
                     field = output_fields(i_field);
 
@@ -139,6 +169,19 @@ classdef ncep < handle
         end
 
         function data = read_point(refs, lat, lon, params)
+            %% Read a geo-referenced point
+            % [data] = ncep.read_point(refs, lat, lon[, Name, Value])
+            % Inputs
+            %   refs    (ncep)      Referencing objects
+            %   lat     (double)    Signed latitude
+            %   lon     (double)    Signed longitude
+            % Name-value inputs
+            %   field   (string)    String pattern or exact string identifying the
+            %                       "field" column of .inventory()
+            %   layer   (string)    String pattern or exact string identifying the
+            %                       "layer" column of .inv
+            % Outputs
+            %   data    (xarray) Output data
             arguments
                 refs (1, :) ncep;
                 lat (1,1) double;
@@ -177,10 +220,18 @@ classdef ncep < handle
     end
 
     methods (Static, Access = public)
-        % List valid models, products, cycles, depths given previous arguments
-        % All arguments are optional, and the valid values for the next argument area always returned
+        
         function [values, sources] = list(model, product, cycle, depth)
+            %% List valid models, products, cycles, depths given previous arguments
             % [values, sources] = list([model, product, cycle, depth])
+            % Inputs
+            %   model   (string)    Model identifier
+            %   product (string)    Product identifier
+            %   cycle   (datetime)  Output time
+            %   depth   (duration)  Forecast depth
+            % Outputs
+            %   values  (several)   Valid values of the subsequent argument
+            %   sources (string)    Candidate URLs to look for .grib2 and .grib2.idx
             arguments
                 model (1,1) string = missing;
                 product (1,1) string = missing;
@@ -293,6 +344,18 @@ classdef ncep < handle
         end
 
         function refs = forecast(model, product, validtime, reftime)
+            %% Retrieve forecast nearest specified times
+            % refs = ncep.forecast(model, product, validtime, reftime)
+            % Inputs
+            %   model   (string)        Model identifier (see ncep.list)
+            %   product (string)        Product identifier (see ncep.list)
+            %   validtime (datetime)    [time] scalar -  yields nearest forecast
+            %                           [start end] 1x2 - yields smallest sequence of
+            %                           forecasts completely surrounding [start end]
+            %   reftime (datetime)      Output cycle is earliest time on or
+            %                           before this reference time
+            % Outputs
+            %   refs    (ncep)          Referencing object(s)
             arguments
                 model (1,1) string;
                 product (1,1) string;
@@ -328,6 +391,16 @@ classdef ncep < handle
         end
 
         function refs = analysis(model, product, validtime)
+            %% Retrieve forecast nearest specified times
+            % refs = ncep.analysis(model, product, validtime)
+            % Inputs
+            %   model   (string)        Model identifier (see ncep.list)
+            %   product (string)        Product identifier (see ncep.list)
+            %   validtime (datetime)    [time] scalar -  yields nearest analysis
+            %                           [start end] 1x2 - yields smallest sequence of
+            %                           analyses completely surrounding [start end]
+            % Outputs
+            %   refs    (ncep)          Referencing object(s)
             arguments
                 model (1,1) string;
                 product (1,1) string;
@@ -464,7 +537,6 @@ classdef ncep < handle
 
             % status output
 
-            % [~, name, ext] = fileparts(ref.origin);
             fprintf("Located %d messages at %s\n", length(messages), ref.origin);
             data_file_id = fopen(ref.local, "a");
             if data_file_id < 0
@@ -515,6 +587,8 @@ classdef ncep < handle
 
             % register addition of messages as bands
             % using (band) becasue it is what readgeoraster() uses
+            
+            % XXX this is broken
             ref.inventory.band(messages) = 1:length(messages) + max([0; ref.inventory.band]);
             [num, unit] = ncep.format_filesize(bytes_downloaded);
             fprintf("Downloaded %d messages (%.1f %s) in %.3g sec\n", ...
