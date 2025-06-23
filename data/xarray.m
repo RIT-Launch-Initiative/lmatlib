@@ -474,9 +474,73 @@ classdef xarray < matlab.mixin.indexing.RedefinesDot ...
         end
 
         function gh = contour(obj, opts)
+            arguments (Input)
+                obj xarray
+                opts.cmap (1,1) string = "parula";
+                opts.clabel (1,1) string = missing;
+                opts.levels (1,:) double = [];
+            end
+
+            [ism, dim] = ismatrix(obj);
+            assert(ism, "<xarray> input to <contour> must have exactly two non-scalar dimensions");
+            obj = obj.align(dim);
+            if isempty(opts.levels)
+                [~, gh] = contour(obj.coordinates{2}, obj.coordinates{1}, ...
+                    squeeze(obj.data));
+            else
+                [~, gh] = contour(obj.coordinates{2}, obj.coordinates{1}, ...
+                    squeeze(obj.data), opts.levels);
+            end
+
+            ax = gh.Parent;
+            if ax.XLabel.String == ""
+                ax.XLabel.String = obj.axes(2);
+            end
+            if ax.YLabel.String == ""
+                ax.YLabel.String = obj.axes(1);
+            end
+
+            colormap(ax, opts.cmap);
+            if ~ismissing(opts.clabel)
+                cb = colorbar(ax);
+                cb.Label.String = opts.clabel;
+            end
+            axis(ax, "tight");
         end
 
         function gh = contourf(obj, opts)
+            arguments (Input)
+                obj xarray
+                opts.cmap (1,1) string = "parula";
+                opts.clabel (1,1) string = missing;
+                opts.levels (1,:) double = [];
+            end
+
+            [ism, dim] = ismatrix(obj);
+            assert(ism, "<xarray> input to <contour> must have exactly two non-scalar dimensions");
+            obj = obj.align(dim);
+            if isempty(opts.levels)
+                [~, gh] = contourf(obj.coordinates{2}, obj.coordinates{1}, ...
+                    squeeze(obj.data));
+            else
+                [~, gh] = contourf(obj.coordinates{2}, obj.coordinates{1}, ...
+                    squeeze(obj.data), opts.levels);
+            end
+
+            ax = gh.Parent;
+            if ax.XLabel.String == ""
+                ax.XLabel.String = obj.axes(2);
+            end
+            if ax.YLabel.String == ""
+                ax.YLabel.String = obj.axes(1);
+            end
+
+            colormap(ax, opts.cmap);
+            if ~ismissing(opts.clabel)
+                cb = colorbar(ax);
+                cb.Label.String = opts.clabel;
+            end
+            axis(ax, "tight");
         end
     end
 
